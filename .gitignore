@@ -1,0 +1,63 @@
+# ==============================================================================
+# .gitignore — Physical AI Hackathon Bilbao Lab (LeRobot)
+# Excluye repositorios externos clonables, entornos virtuales, pesos de modelos,
+# datasets, grabaciones de cámaras/fotos privadas, logs y configuraciones de IDE.
+# ==============================================================================
+
+# 1. Repositorio oficial de LeRobot (se clona con `bash scripts/00_setup_env.sh`)
+lerobot/
+
+# 2. Entornos virtuales y gestores de Python
+.venv/
+venv/
+env/
+.uv-python/
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# 3. Salidas de entrenamiento, evaluación, fotos de cámaras y visualizaciones
+#    (Evita subir fotos tomadas con tu webcam, vídeos MP4 o checkpoints pesados)
+outputs/
+captured_images/
+data/
+data_cache/
+wandb/
+trackio/
+
+# 4. Extensiones de modelos, datasets y capturas multimedia (seguridad extra)
+*.safetensors
+*.pt
+*.pth
+*.onnx
+*.ckpt
+*.parquet
+*.rrd
+*.mp4
+*.mov
+*.avi
+*.jpg
+*.jpeg
+*.png
+*.webp
+
+# 5. Secretos, tokens (HF_TOKEN, WANDB_API_KEY) y overrides locales de puertos
+.env
+.env.*
+*.local.sh
+*secret*
+*token*
+*credentials*
+
+# 6. Archivos de sistema operativo e IDEs (PyCharm / VSCode / macOS)
+.idea/
+.vscode/
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+Thumbs.db
