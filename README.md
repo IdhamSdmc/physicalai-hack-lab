@@ -65,6 +65,8 @@ La carpeta [`tests/`](tests/) valida sin necesidad de brazo físico ni red:
 - **Orquestador y utilidades de hardware/entorno** ([`tests/test_orchestrator_and_hardware_utils.py`](tests/test_orchestrator_and_hardware_utils.py)): máquina de estados en `RANGE_0_100`, detección de puertos serie macOS/Linux y métricas de stream de cámaras.
 
 ```bash
+.venv/bin/python -m pytest -v
+# o sin dependencias externas:
 .venv/bin/python -m unittest discover -s tests -v
 ```
 

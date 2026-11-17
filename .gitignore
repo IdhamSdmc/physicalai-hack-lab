@@ -53,7 +53,8 @@ trackio/
 *token*
 *credentials*
 
-# 6. Archivos de sistema operativo e IDEs (PyCharm / VSCode / macOS)
+# 6. Archivos de sistema operativo, caché de tests e IDEs (PyCharm / VSCode / macOS)
+.pytest_cache/
 .idea/
 .vscode/
 .DS_Store
