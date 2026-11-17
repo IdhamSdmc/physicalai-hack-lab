@@ -141,3 +141,16 @@ En el Paso 4.3 entrenamos y evaluamos una **Diffusion Policy** nativa sobre el s
 - **Cruz Roja (`+`):** Es la acción objetivo `(X, Y)` que la política está ordenando en ese instante.
 - **Bloque Gris en forma de T:** El objeto físico con rozamiento simulado en PyMunk.
 - **Silueta Verde en T:** La meta donde debe encajar el bloque gris (`max_reward = 1.0` cuando solapan al 100%, considerándose `success = True` cuando supera `0.95`).
+
+---
+
+## Lección 7: Alineación con la Guía Oficial SO-101 de Bilbao (`v0.7.0`) y Suite de Validación
+
+Tras revisar la [Guía oficial del SO-101 del Hackathon LeRobot Bilbao](https://hackathonbilbao.eus/guia-so-101) (viernes 20 nov, 16:00, La Perrera Espazioa), actualizamos el repositorio con 6 correcciones críticas y una suite de validación automática:
+
+1. **Versión recomendada `lerobot==0.7.0`:** La guía oficial exige `v0.7.0` para todos sus comandos (`pip install 'lerobot[core_scripts,training,feetech]==0.7.0'`), además de contemplar **LeLab** (`uv tool install git+https://github.com/huggingface/leLab.git && lelab`) y **SenseCraft Robotics**. El entorno local clonado el 2 de noviembre (`v0.6.2` en commit previo a `v0.7.0`) ya comparte la mayoría de contratos de `v0.7.0`, y [`scripts/01_check_m5_env.py`](scripts/01_check_m5_env.py) ahora avisa si la versión instalada es `< 0.7.0`.
+2. **Prefijo obligatorio `rollout_` en `lerobot-rollout`:** Al grabar episodios con `lerobot-rollout` (`episodic`, `dagger`, `sentry`, `highlight`), LeRobot rechaza cualquier `repo_id` que no empiece por `rollout_`. [`scripts/env_hackathon.sh`](scripts/env_hackathon.sh) y [`CHEATSHEET_BILBAO_48H.md`](CHEATSHEET_BILBAO_48H.md) usan ahora `ROLLOUT_DATASET_REPO` y `DAGGER_DATASET_REPO` con prefijo `rollout_`.
+3. **Timestamps automáticos y `--resume=true`:** `lerobot-record` añade `_AAAAMMDD_HHMMSS` salvo con `--dataset.no_stamp=true`, y al reanudar con `--resume=true`, `--dataset.num_episodes` cuenta **solo los episodios adicionales** de esa sesión.
+4. **Cálculo realista de tiempos de entrenamiento en M5:** Con el tiempo medido en tu M5 (`~1.65 s/paso` en `batch_size=8`), `1.000` pasos tardan ~28 min y `10.000` pasos ~4.5 h. Por ello la guía recomienda smoke tests cortos en local y usar M5 de noche, Google Colab o HF Jobs (`--job.target=a10g-small`) para `20k–40k` pasos.
+5. **Escala real de la pinza (`RANGE_0_100`) y `PolicyOutput`:** En `SO101Follower`, la pinza usa `[0..100]` (`~1.3` vacía vs `~13.8` sujetando bloque); [`scripts/05_vlm_orchestrator_template.py`](scripts/05_vlm_orchestrator_template.py) y [`scripts/06_inspect_and_infer_checkpoint.py`](scripts/06_inspect_and_infer_checkpoint.py) reflejan estas escalas y manejan tanto tensores directos como `PolicyOutput` (`dict`).
+6. **Preflight y pruebas automatizadas (`tests/`):** [`scripts/09_preflight_so101.py`](scripts/09_preflight_so101.py) valida puertos, IDs distintos (`ROBOT_ID != TELEOP_ID`), calibraciones de 6 servos y contratos `draccus` de `RecordConfig` y `RolloutConfig`; la suite en [`tests/`](tests/) permite verificar todo el laboratorio en segundos con `python -m unittest discover -s tests -v`.
