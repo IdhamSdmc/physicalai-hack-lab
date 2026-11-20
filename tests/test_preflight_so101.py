@@ -38,8 +38,8 @@ def _valid_calibration(offset: int = 0) -> dict[str, dict[str, int]]:
             "id": idx,
             "drive_mode": 0,
             "homing_offset": 10 + offset + idx,
-            "range_min": 500 + offset,
-            "range_max": 3500 + offset,
+            "range_min": 0 if name in preflight.FULL_TURN_MOTORS else 500 + offset,
+            "range_max": 4095 if name in preflight.FULL_TURN_MOTORS else 3500 + offset,
         }
         for idx, name in enumerate(preflight.SO101_MOTORS, start=1)
     }
@@ -118,14 +118,30 @@ class PreflightSO101Tests(unittest.TestCase):
             res_dup = preflight.validate_calibration_pair(cal_dir, "f1", "l1", require_files=True)
             self.assertTrue(any("idéntica" in err for err in res_dup["errors"]))
 
-            # Articulacion faltante + rango invertido
+            # Articulacion faltante + rango invertido + homing_offset fuera de rango STS3215
             broken = _valid_calibration(offset=50)
             del broken["gripper"]
             broken["shoulder_pan"]["range_min"] = 3900
+            broken["shoulder_lift"]["homing_offset"] = 3000
             l_path.write_text(json.dumps(broken))
             res_bad = preflight.validate_calibration_pair(cal_dir, "f1", "l1", require_files=True)
             self.assertTrue(any("gripper" in err for err in res_bad["errors"]))
             self.assertTrue(any("range_min" in err for err in res_bad["errors"]))
+            self.assertTrue(any("homing_offset" in err for err in res_bad["errors"]))
+
+            # Calibracion fisicamente incompleta (recorrido corto, homing descentrado, wrist_roll no full-turn, divergencia entre brazos)
+            sloppy = _valid_calibration(offset=50)
+            sloppy["elbow_flex"]["range_min"] = 2000
+            sloppy["elbow_flex"]["range_max"] = 2060  # span=60 (<100) y divergencia >1000 vs follower
+            sloppy["shoulder_pan"]["range_min"] = 2200  # homing 2047 fuera de [2200, 3550]
+            sloppy["wrist_roll"]["range_min"] = 200
+            l_path.write_text(json.dumps(sloppy))
+            res_warn = preflight.validate_calibration_pair(cal_dir, "f1", "l1", require_files=True)
+            self.assertEqual(res_warn["errors"], [])
+            self.assertTrue(any("recorrido muy corto" in w for w in res_warn["warnings"]))
+            self.assertTrue(any("centro homing" in w for w in res_warn["warnings"]))
+            self.assertTrue(any("full_turn" in w for w in res_warn["warnings"]))
+            self.assertTrue(any("Diferencia grande de recorrido" in w for w in res_warn["warnings"]))
 
     def test_cli_exit_codes_for_valid_and_invalid_env(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

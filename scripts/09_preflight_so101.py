@@ -37,7 +37,12 @@ SO101_MOTORS: tuple[str, ...] = (
     "wrist_roll",
     "gripper",
 )
+FULL_TURN_MOTORS: tuple[str, ...] = ("wrist_roll",)
 CALIBRATION_FIELDS: tuple[str, ...] = ("id", "drive_mode", "homing_offset", "range_min", "range_max")
+STS3215_MAX_TICK = 4095
+STS3215_HALF_TURN = 2047
+MIN_RECORDED_SPAN_TICKS = 100
+MAX_CROSS_ARM_SPAN_DIFF_TICKS = 1000
 VALID_FOLLOWER_TYPES = ("so101_follower", "so100_follower")
 VALID_TELEOP_TYPES = ("so101_leader", "so100_leader")
 
@@ -161,20 +166,21 @@ def validate_hackathon_env(env: dict[str, str]) -> dict[str, Any]:
     }
 
 
-def validate_calibration_file(fpath: Path) -> tuple[list[str], dict[str, Any] | None]:
-    """Validate one LeRobot SO-101 calibration JSON file structure and joint ranges."""
+def validate_calibration_file(fpath: Path) -> tuple[list[str], list[str], dict[str, Any] | None]:
+    """Validate one LeRobot SO-101 calibration JSON file against STS3215 and SO-101 guide rules."""
     if not fpath.is_file():
-        return [f"No existe archivo de calibración: {fpath}"], None
+        return [f"No existe archivo de calibración: {fpath}"], [], None
 
     try:
         data = json.loads(fpath.read_text())
     except json.JSONDecodeError as exc:
-        return [f"JSON inválido en {fpath}: {exc}"], None
+        return [f"JSON inválido en {fpath}: {exc}"], [], None
 
     if not isinstance(data, dict):
-        return [f"Formato inválido en {fpath}: se esperaba objeto JSON por articulación."], None
+        return [f"Formato inválido en {fpath}: se esperaba objeto JSON por articulación."], [], None
 
     errors: list[str] = []
+    warnings: list[str] = []
     for expected_idx, motor_name in enumerate(SO101_MOTORS, start=1):
         entry = data.get(motor_name)
         if not isinstance(entry, dict):
@@ -187,12 +193,40 @@ def validate_calibration_file(fpath: Path) -> tuple[list[str], dict[str, Any] | 
             errors.append(
                 f"{fpath.name} [{motor_name}]: motor id={entry['id']} (esperado {expected_idx}; revisa IDs de servos)."
             )
+        if "homing_offset" in entry and abs(int(entry["homing_offset"])) > STS3215_HALF_TURN:
+            errors.append(
+                f"{fpath.name} [{motor_name}]: homing_offset={entry['homing_offset']} fuera de [-{STS3215_HALF_TURN}, {STS3215_HALF_TURN}]."
+            )
         if "range_min" in entry and "range_max" in entry:
-            if float(entry["range_min"]) >= float(entry["range_max"]):
+            r_min = int(entry["range_min"])
+            r_max = int(entry["range_max"])
+            if r_min >= r_max:
                 errors.append(
-                    f"{fpath.name} [{motor_name}]: range_min ({entry['range_min']}) >= range_max ({entry['range_max']})."
+                    f"{fpath.name} [{motor_name}]: range_min ({r_min}) >= range_max ({r_max})."
                 )
-    return errors, data
+                continue
+            if r_min < 0 or r_max > STS3215_MAX_TICK:
+                errors.append(
+                    f"{fpath.name} [{motor_name}]: rango [{r_min}, {r_max}] fuera del encoder STS3215 [0, {STS3215_MAX_TICK}]."
+                )
+                continue
+
+            if motor_name in FULL_TURN_MOTORS:
+                if r_min != 0 or r_max != STS3215_MAX_TICK:
+                    warnings.append(
+                        f"{fpath.name} [{motor_name}]: en SO-101 suele ser full_turn [0, {STS3215_MAX_TICK}] (actual [{r_min}, {r_max}])."
+                    )
+            else:
+                span = r_max - r_min
+                if span < MIN_RECORDED_SPAN_TICKS:
+                    warnings.append(
+                        f"{fpath.name} [{motor_name}]: recorrido muy corto ({span} ticks); ¿olvidaste moverla de extremo a extremo al calibrar?"
+                    )
+                if not (r_min < STS3215_HALF_TURN < r_max):
+                    warnings.append(
+                        f"{fpath.name} [{motor_name}]: el centro homing ({STS3215_HALF_TURN}) quedó fuera de [{r_min}, {r_max}]; recalibra desde postura media."
+                    )
+    return errors, warnings, data
 
 
 def validate_calibration_pair(
@@ -201,7 +235,7 @@ def validate_calibration_pair(
     teleop_id: str,
     require_files: bool = False,
 ) -> dict[str, Any]:
-    """Validate SO-101 follower and leader calibration files and check against accidental swaps."""
+    """Validate SO-101 follower and leader calibration files and check against swaps or incomplete sweeps."""
     follower_path = calibration_dir / "robots" / "so_follower" / f"{robot_id}.json"
     leader_path = calibration_dir / "teleoperators" / "so_leader" / f"{teleop_id}.json"
 
@@ -212,21 +246,37 @@ def validate_calibration_pair(
         warnings.append(f"Follower sin calibrar todavía ({follower_path}); ejecuta `lerobot-calibrate` en la mesa.")
         follower_data = None
     else:
-        f_errs, follower_data = validate_calibration_file(follower_path)
+        f_errs, f_warns, follower_data = validate_calibration_file(follower_path)
         errors.extend(f_errs)
+        warnings.extend(f_warns)
 
     if not leader_path.exists() and not require_files:
         warnings.append(f"Leader sin calibrar todavía ({leader_path}); ejecuta `lerobot-calibrate` en la mesa.")
         leader_data = None
     else:
-        l_errs, leader_data = validate_calibration_file(leader_path)
+        l_errs, l_warns, leader_data = validate_calibration_file(leader_path)
         errors.extend(l_errs)
+        warnings.extend(l_warns)
 
-    if follower_data is not None and leader_data is not None and follower_data == leader_data:
-        errors.append(
-            f"Calibración idéntica entre Follower ({follower_path.name}) y Leader ({leader_path.name}). "
-            "Recalibra cada brazo por separado con su propio --robot.id / --teleop.id."
-        )
+    if follower_data is not None and leader_data is not None:
+        if follower_data == leader_data:
+            errors.append(
+                f"Calibración idéntica entre Follower ({follower_path.name}) y Leader ({leader_path.name}). "
+                "Recalibra cada brazo por separado con su propio --robot.id / --teleop.id."
+            )
+        else:
+            for motor_name in ("shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex"):
+                f_entry = follower_data.get(motor_name)
+                l_entry = leader_data.get(motor_name)
+                if isinstance(f_entry, dict) and isinstance(l_entry, dict):
+                    if {"range_min", "range_max"} <= f_entry.keys() and {"range_min", "range_max"} <= l_entry.keys():
+                        f_span = int(f_entry["range_max"]) - int(f_entry["range_min"])
+                        l_span = int(l_entry["range_max"]) - int(l_entry["range_min"])
+                        if abs(f_span - l_span) > MAX_CROSS_ARM_SPAN_DIFF_TICKS:
+                            warnings.append(
+                                f"[{motor_name}] Diferencia grande de recorrido Follower ({f_span}) vs Leader ({l_span} ticks); "
+                                "verifica que ambos recorrieron todo su rango al calibrar."
+                            )
 
     return {
         "errors": errors,

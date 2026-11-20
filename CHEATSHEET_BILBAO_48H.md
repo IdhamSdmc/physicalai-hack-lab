@@ -46,7 +46,10 @@ python scripts/09_preflight_so101.py --check-hardware
 ## FASE 1: Calibración y Teleoperación de Prueba (`Viernes noche`)
 
 > [!IMPORTANT]
-> **Los `--robot.id` y `--teleop.id` importan:** Pon todas las articulaciones a mitad de recorrido, pulsa Enter y mueve cada eje de extremo a extremo. Usa **siempre los mismos IDs** y **nunca** le des al Leader el ID del Follower (mezclaría calibraciones sin dar error).
+> **Procedimiento oficial de calibración SO-101 ([guía Hugging Face](https://huggingface.co/docs/lerobot/so101)):**
+> 1. **Postura media (Homing):** Coloca todas las articulaciones exactamente a **mitad de recorrido** (siguiendo el diagrama que imprime LeRobot) y pulsa `Enter` — fija el centro en `2047` ticks.
+> 2. **Recorrido completo:** Mueve una a una las **5 articulaciones con tope** (`shoulder_pan`, `shoulder_lift`, `elbow_flex`, `wrist_flex`, `gripper`) de extremo a extremo y pulsa `Enter` (`wrist_roll` queda automáticamente en vuelta completa `[0..4095]`).
+> 3. **IDs únicos e invariables:** Usa siempre los mismos `--robot.id` / `--teleop.id` y **nunca** le des al Leader el ID del Follower. Si ya existía calibración y quieres rehacerla, pulsa `c` + `Enter`.
 
 ```bash
 # 1.1 Calibrar brazo Esclavo (Follower)
@@ -61,7 +64,10 @@ lerobot-calibrate \
   --teleop.port=${LEADER_PORT} \
   --teleop.id=${TELEOP_ID}
 
-# 1.3 Probar Teleoperación en vivo con cámaras (sin grabar aún)
+# 1.3 Verificar calibraciones guardadas (6 motores, homing centrado y sin duplicado Leader=Follower)
+python scripts/09_preflight_so101.py --require-calibration
+
+# 1.4 Probar Teleoperación en vivo con cámaras (sin grabar aún)
 lerobot-teleoperate \
   --robot.type=${ROBOT_TYPE} \
   --robot.port=${FOLLOWER_PORT} \
@@ -72,6 +78,8 @@ lerobot-teleoperate \
   --teleop.id=${TELEOP_ID} \
   --display_data=true
 ```
+
+> **Si un servo no responde o falla la ID en un motor sustituido:** En placas Waveshare verifica que los **dos jumpers están en el canal `B` (USB)**. Si hace falta reconfigurar IDs/baudrate, usa `lerobot-setup-motors --robot.type=so101_follower --robot.port=${FOLLOWER_PORT}` (o `--teleop.type=so101_leader --teleop.port=${LEADER_PORT}`) conectando **un único motor cada vez** desde `gripper` (id 6) hasta `shoulder_pan` (id 1).
 
 ---
 
