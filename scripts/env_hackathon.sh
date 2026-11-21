@@ -11,9 +11,16 @@
 #      python scripts/09_preflight_so101.py --check-hardware
 # ==============================================================================
 
-# 1. Activar entorno virtual local si existe (compatible también con conda `lerobot`)
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-if [ -f "${REPO_ROOT}/.venv/bin/activate" ] && [ -z "${VIRTUAL_ENV:-}" ] && [ -z "${CONDA_PREFIX:-}" ]; then
+# 1. Activar entorno virtual local si existe (compatible con zsh y bash)
+if [ -n "${BASH_SOURCE[0]:-}" ]; then
+  _ENV_SCRIPT_PATH="${BASH_SOURCE[0]}"
+elif [ -n "${ZSH_VERSION:-}" ]; then
+  _ENV_SCRIPT_PATH="${(%):-%x}"
+else
+  _ENV_SCRIPT_PATH="$0"
+fi
+REPO_ROOT="$(cd "$(dirname "${_ENV_SCRIPT_PATH}")/.." && pwd)"
+if [ -f "${REPO_ROOT}/.venv/bin/activate" ] && [ "${VIRTUAL_ENV:-}" != "${REPO_ROOT}/.venv" ]; then
   source "${REPO_ROOT}/.venv/bin/activate"
 fi
 export PYTORCH_ENABLE_MPS_FALLBACK=1
@@ -27,14 +34,14 @@ export ROBOT_ID="${ROBOT_ID:-bilbao_follower}"
 export TELEOP_ID="${TELEOP_ID:-bilbao_leader}"
 
 # 3. Puertos Serie USB (macOS: /dev/tty.usbmodem* | Ubuntu: /dev/ttyACM*)
-export FOLLOWER_PORT="${FOLLOWER_PORT:-/dev/tty.usbmodem585A0076841}"
-export LEADER_PORT="${LEADER_PORT:-/dev/tty.usbmodem58760431551}"
+export FOLLOWER_PORT="${FOLLOWER_PORT:-/dev/tty.usbmodem5B610343371}"
+export LEADER_PORT="${LEADER_PORT:-/dev/tty.usbmodem5B910266151}"
 
 # 4. Índices y nombres de Cámaras OpenCV (verificados con `lerobot-find-cameras`)
 #    IMPORTANTE: Los nombres (`top` y `wrist`, o `up` y `side`) DEBEN ser idénticos
 #    al grabar (`lerobot-record`), entrenar (`lerobot-train`) y desplegar (`lerobot-rollout`).
-export CAM_TOP_IDX="${CAM_TOP_IDX:-${CAM_UP_IDX:-1}}"
-export CAM_WRIST_IDX="${CAM_WRIST_IDX:-${CAM_SIDE_IDX:-0}}"
+export CAM_TOP_IDX="${CAM_TOP_IDX:-${CAM_UP_IDX:-0}}"
+export CAM_WRIST_IDX="${CAM_WRIST_IDX:-${CAM_SIDE_IDX:-1}}"
 export ROBOT_CAMERAS="{ top: {type: opencv, index_or_path: ${CAM_TOP_IDX}, width: 640, height: 480, fps: 30}, wrist: {type: opencv, index_or_path: ${CAM_WRIST_IDX}, width: 640, height: 480, fps: 30} }"
 
 # 5. Usuario Hugging Face, Datasets y Política
