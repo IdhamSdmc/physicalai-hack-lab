@@ -40,8 +40,8 @@ export LEADER_PORT="${LEADER_PORT:-/dev/tty.usbmodem5B910266151}"
 # 4. Índices y nombres de Cámaras OpenCV (verificados con `lerobot-find-cameras`)
 #    IMPORTANTE: Los nombres (`top` y `wrist`, o `up` y `side`) DEBEN ser idénticos
 #    al grabar (`lerobot-record`), entrenar (`lerobot-train`) y desplegar (`lerobot-rollout`).
-export CAM_TOP_IDX="${CAM_TOP_IDX:-${CAM_UP_IDX:-0}}"
-export CAM_WRIST_IDX="${CAM_WRIST_IDX:-${CAM_SIDE_IDX:-1}}"
+export CAM_TOP_IDX="${CAM_TOP_IDX:-${CAM_UP_IDX:-1}}"
+export CAM_WRIST_IDX="${CAM_WRIST_IDX:-${CAM_SIDE_IDX:-0}}"
 export ROBOT_CAMERAS="{ top: {type: opencv, index_or_path: ${CAM_TOP_IDX}, width: 640, height: 480, fps: 30}, wrist: {type: opencv, index_or_path: ${CAM_WRIST_IDX}, width: 640, height: 480, fps: 30} }"
 
 # 5. Usuario Hugging Face, Datasets y Política
@@ -55,12 +55,12 @@ if [ -z "${HF_USER:-}" ]; then
   HF_USER="${HF_USER:-local_team}"
 fi
 export HF_USER
-export DATASET_NAME="${DATASET_NAME:-bilbao_task1}"
+export DATASET_NAME="${DATASET_NAME:-bilbao_cubes_v1}"
 export DATASET_REPO="${HF_USER}/${DATASET_NAME}"
 export ROLLOUT_DATASET_REPO="${HF_USER}/rollout_${DATASET_NAME}"
 export DAGGER_DATASET_REPO="${HF_USER}/rollout_${DATASET_NAME}_dagger"
 export POLICY_REPO="${HF_USER}/act_${DATASET_NAME}"
-export TASK_DESC="${TASK_DESC:-Pick the target object and place it in the box}"
+export TASK_DESC="${TASK_DESC:-Pick red cube and put in Almacen}"
 
 if [ -z "${HACK_ENV_QUIET:-}" ]; then
   echo "✅ Variables cargadas: ROBOT=${ROBOT_TYPE} (${ROBOT_ID}) | TELEOP=${TELEOP_TYPE} (${TELEOP_ID})"

@@ -1,6 +1,17 @@
-# Physical AI Hackathon Bilbao — Laboratorio & Toolkit Local (LeRobot v0.7.0 / SO-101)
+# Physical AI Hackathon Bilbao — Zero-Cross-Contamination Triage (LeRobot v0.7.0 / SO-101)
 
-Kit de preparación, validación pre-vuelo, auditoría de datos, entrenamiento local en Apple Silicon (`mps`) y despliegue para el **Hackathon LeRobot Bilbao** (20–22 nov 2026, La Perrera Espazioa, Sabino Arana 50, Bilbao), alineado con la [Guía oficial del SO-101](https://hackathonbilbao.eus/guia-so-101).
+Kit de preparación, validación pre-vuelo, auditoría de datos, entrenamiento dual `ACT` en nube GPU y supervisor autónomo OpenCV en tiempo real para el proyecto **"Zero-Cross-Contamination Triage"** en el **Hackathon LeRobot Bilbao** (20–22 nov 2026, La Perrera Espazioa, Sabino Arana 50, Bilbao), alineado con la [Guía oficial del SO-101](https://hackathonbilbao.eus/guia-so-101).
+
+---
+
+## Repositorios y Recursos en Hugging Face
+
+- **Dataset Completo Auditado (`192` episodios limpios / `200` grabados):** [`coalva94/bilbao_triage_complete_v3`](https://huggingface.co/datasets/coalva94/bilbao_triage_complete_v3)
+- **Dataset Especializado Sano (`96` episodios Verdes → Almacén):** [`coalva94/bilbao_triage_sano_v3`](https://huggingface.co/datasets/coalva94/bilbao_triage_sano_v3)
+- **Dataset Especializado Contaminado (`96` episodios Rojos → Desechos + Vaso D):** [`coalva94/bilbao_triage_contaminado_v3`](https://huggingface.co/datasets/coalva94/bilbao_triage_contaminado_v3)
+- **Políticas Dual ACT V3:** [`coalva94/act_sano_v3`](https://huggingface.co/coalva94/act_sano_v3) · [`coalva94/act_contaminado_v3`](https://huggingface.co/coalva94/act_contaminado_v3)
+- **Supervisor Autónomo OpenCV + Sesión Persistente:** [`scripts/10_opencv_triage_supervisor.py`](scripts/10_opencv_triage_supervisor.py) (prioridad *Clean-First*, detección en vivo `~3.2 Hz`, `EarlyStopTracker`, re-mapeo automático ante golpes y retorno seguro `lift_first` a `HOME`).
+- **Entrenamiento Dual ACT:** [`scripts/train_dual_act_triage.sh`](scripts/train_dual_act_triage.sh) y bitácora de captura en [`NOTAS_EPISODIOS_64.md`](NOTAS_EPISODIOS_64.md).
 
 ---
 
