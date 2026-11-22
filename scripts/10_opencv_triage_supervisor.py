@@ -24,6 +24,7 @@ import json
 import math
 import os
 from pathlib import Path
+import shutil
 import signal
 import subprocess
 import sys
@@ -44,14 +45,14 @@ DEFAULT_POLICY_CONTAMINADO = REPO_ROOT / "outputs" / "train" / "act_contaminado"
 
 DEFAULT_REFERENCE_FRAME_PATH = REPO_ROOT / "outputs" / "viz" / "train_sano_camera_top_file000_f0.jpg"
 
-# Postura media HOME medida en los bloques finales limpios (Bloques 5 y 7)
+# Postura media HOME medida sobre los 192 episodios limpios del dataset V3 (evita mismatch de ~18° en Chunk 0)
 DEFAULT_HOME_POSE: dict[str, float] = {
-    "shoulder_pan.pos": -6.0,
-    "shoulder_lift.pos": -65.0,
-    "elbow_flex.pos": 21.0,
-    "wrist_flex.pos": 95.0,
-    "wrist_roll.pos": 2.0,
-    "gripper.pos": 1.5,
+    "shoulder_pan.pos": -4.9,
+    "shoulder_lift.pos": -46.7,
+    "elbow_flex.pos": 8.9,
+    "wrist_flex.pos": 99.6,
+    "wrist_roll.pos": -5.5,
+    "gripper.pos": 1.4,
 }
 
 ROI_NAMES = ("ZONA_A", "ZONA_B_SUP", "ZONA_B_INF", "VASO_D")
@@ -277,6 +278,17 @@ def _save_hud_atomic(hud_path: Path, hud_bgr: np.ndarray) -> None:
     tmp_path = hud_path.with_name(f".{hud_path.stem}.tmp{hud_path.suffix}")
     if cv2.imwrite(str(tmp_path), hud_bgr):
         os.replace(tmp_path, hud_path)
+
+
+def _archive_fail_snapshot(hud_path: Path, fail_path: Path) -> bool:
+    """Copy latest rendered HUD atomically to a diagnostic fail file when an attempt fails."""
+    if not hud_path.exists():
+        return False
+    fail_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = fail_path.with_name(f".{fail_path.stem}.tmp{fail_path.suffix}")
+    shutil.copyfile(hud_path, tmp_path)
+    os.replace(tmp_path, fail_path)
+    return True
 
 
 def detect_scene_change(
@@ -844,6 +856,7 @@ class PersistentTriageSession:
         device: str = "mps",
         max_relative_target: float = 30.0,
         n_action_steps: int = 50,
+        post_home_action_steps: int = 0,
         temporal_ensemble_coeff: float | None = None,
     ) -> None:
         self.policy_paths = {"sano": policy_sano_path, "contaminado": policy_contaminado_path}
@@ -857,6 +870,7 @@ class PersistentTriageSession:
         self.requested_device = device
         self.max_relative_target = float(max_relative_target)
         self.n_action_steps = int(n_action_steps)
+        self.post_home_action_steps = int(post_home_action_steps)
         self.temporal_ensemble_coeff = temporal_ensemble_coeff
 
         self.robot: Any = None
@@ -1021,7 +1035,21 @@ class PersistentTriageSession:
                     obs_frame = self._build_dataset_frame(self.dataset_features, obs, prefix=self._obs_str)
                     batch = self._prepare_obs(obs_frame, self.torch_device, "", self.robot_type)
                     batch = pre(batch)
+                    action_queue = getattr(policy, "_action_queue", None)
+                    refilled_now = action_queue is not None and len(action_queue) == 0
                     action_tensor = policy.select_action(batch)
+                    if (
+                        refilled_now
+                        and self.temporal_ensemble_coeff is None
+                        and self.post_home_action_steps > 0
+                        and ticks > 0
+                        and action_queue is not None
+                    ):
+                        # Chunk 0 usa n_action_steps completos para saltar la pausa en HOME;
+                        # los siguientes re-observan cámaras ~2.3x más rápido durante el descenso y agarre.
+                        keep_tail = max(self.post_home_action_steps - 1, 0)
+                        while len(action_queue) > keep_tail:
+                            action_queue.pop()
                     action_out = post(action_tensor).squeeze(0).cpu()
                     action_dict = {k: float(action_out[i].item()) for i, k in enumerate(self.ordered_action_keys)}
                     self.robot.send_action(action_dict)
@@ -1156,6 +1184,7 @@ def run_autonomous_supervisor(
     go_home: bool = False,
     max_relative_target: float = 30.0,
     n_action_steps: int = 50,
+    post_home_action_steps: int = 0,
     temporal_ensemble_coeff: float | None = None,
     remap_on_change: bool = True,
     remap_threshold_px: float = DEFAULT_REMAP_THRESHOLD_PX,
@@ -1189,6 +1218,7 @@ def run_autonomous_supervisor(
             height=int(config["height"]),
             max_relative_target=max_relative_target,
             n_action_steps=n_action_steps,
+            post_home_action_steps=post_home_action_steps,
             temporal_ensemble_coeff=temporal_ensemble_coeff,
         )
 
@@ -1339,6 +1369,9 @@ def run_autonomous_supervisor(
                 print(f"[VERIFICACIÓN OK] {target}: {prev_count} -> {new_count} en ZONA_A.")
                 retries_by_target[target] = 0
             else:
+                fail_hud_path = hud_path.with_name("debug_last_fail.jpg")
+                if _archive_fail_snapshot(hud_path, fail_hud_path):
+                    print(f"[DEBUG-SNAPSHOT] Fallo guardado en {fail_hud_path}")
                 if remap_on_change and scene_change["moved_objects"]:
                     moves = ", ".join(
                         f"{m['color']} {tuple(m['from'])}->{tuple(m['to'])} (Δ={m['shift_px']}px)"
@@ -1406,7 +1439,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--duration-sano", type=float, default=18.0)
     parser.add_argument("--duration-contaminado", type=float, default=24.0)
     parser.add_argument("--max-relative-target", type=float, default=30.0, help="Límite relativo por paso (30.0 permite cierre rápido de pinza).")
-    parser.add_argument("--n-action-steps", type=int, default=50, help="Pasos por chunk (50 = ~1.67s, supera la pausa inicial en HOME de los Bloques 5 y 6).")
+    parser.add_argument("--n-action-steps", type=int, default=50, help="Pasos para el primer chunk en HOME (50 = ~1.9s).")
+    parser.add_argument(
+        "--post-home-steps",
+        type=int,
+        default=0,
+        help="Opcional: pasos por chunk tras salir de HOME (0 desactiva y usa --n-action-steps uniforme = 50).",
+    )
     parser.add_argument("--temporal-ensemble", type=float, default=0.0, help="Coeficiente Temporal Ensembling ACT (0 desactivado).")
     parser.add_argument("--no-go-home", action="store_true", help="No mover suavemente al HOME del dataset antes/entre ciclos de --mode run.")
     parser.add_argument("--no-remap-on-change", action="store_true", help="Desactivar detección y re-mapeo automático si un objeto cambia de coordenadas.")
@@ -1452,6 +1491,7 @@ def main(argv: list[str] | None = None) -> int:
         go_home=not args.no_go_home,
         max_relative_target=args.max_relative_target,
         n_action_steps=args.n_action_steps,
+        post_home_action_steps=args.post_home_steps,
         temporal_ensemble_coeff=te_coeff,
         remap_on_change=not args.no_remap_on_change,
         remap_threshold_px=args.remap_threshold_px,

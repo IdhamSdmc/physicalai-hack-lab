@@ -544,3 +544,102 @@ class OpenCVTriageSupervisorTests(unittest.TestCase):
         final = robot.actions[-1]
         for k, v in supervisor.DEFAULT_HOME_POSE.items():
             self.assertAlmostEqual(final[k], v, places=3)
+
+    def test_archive_fail_snapshot_copies_atomically(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_dir = Path(tmp)
+            hud_path = tmp_dir / "triage_hud_latest.jpg"
+            fail_path = tmp_dir / "debug_last_fail.jpg"
+
+            self.assertFalse(supervisor._archive_fail_snapshot(hud_path, fail_path))
+            self.assertFalse(fail_path.exists())
+
+            hud_path.write_bytes(b"fake-jpeg-bytes")
+            self.assertTrue(supervisor._archive_fail_snapshot(hud_path, fail_path))
+            self.assertEqual(fail_path.read_bytes(), b"fake-jpeg-bytes")
+
+    def test_persistent_session_refreshes_post_home_chunks_more_frequently(self) -> None:
+        from collections import deque
+        import torch
+
+        class _QueuePolicy:
+            def __init__(self, chunk_steps: int = 6) -> None:
+                self.chunk_steps = chunk_steps
+                self.config = type("Cfg", (), {"temporal_ensemble_coeff": None, "n_action_steps": chunk_steps})()
+                self._action_queue: deque = deque()
+                self.predict_calls = 0
+
+            def reset(self) -> None:
+                self._action_queue.clear()
+
+            def to(self, _dev):
+                return self
+
+            def eval(self):
+                return self
+
+            def select_action(self, _batch: dict) -> torch.Tensor:
+                if len(self._action_queue) == 0:
+                    self.predict_calls += 1
+                    self._action_queue.extend([torch.zeros((1, 6)) for _ in range(self.chunk_steps)])
+                return self._action_queue.popleft()
+
+        class _DummyProc:
+            def reset(self) -> None:
+                pass
+
+            def __call__(self, x):
+                return x
+
+        class _DummyRobot:
+            def __init__(self, *_a, **_kw) -> None:
+                self.observation_features = {k: float for k in supervisor.DEFAULT_HOME_POSE}
+                self.action_features = dict(self.observation_features)
+
+            def connect(self, calibrate: bool = False) -> None:
+                pass
+
+            def get_observation(self) -> dict:
+                return dict(supervisor.DEFAULT_HOME_POSE)
+
+            def send_action(self, action: dict) -> dict:
+                return action
+
+            def disconnect(self) -> None:
+                pass
+
+        policies = [_QueuePolicy(6), _QueuePolicy(6)]
+        p_it = iter(policies)
+        session = supervisor.PersistentTriageSession(
+            policy_sano_path=Path("s"),
+            policy_contaminado_path=Path("c"),
+            robot_port="/dev/null",
+            robot_id="test",
+            robot_type="so101_follower",
+            cam_top_idx=1,
+            cam_wrist_idx=0,
+            device="cpu",
+            n_action_steps=6,
+            post_home_action_steps=2,
+        )
+        with (
+            mock.patch("lerobot.policies.act.modeling_act.ACTPolicy.from_pretrained", side_effect=lambda _p: next(p_it)),
+            mock.patch("lerobot.policies.factory.make_pre_post_processors", side_effect=lambda *_a, **_kw: (_DummyProc(), _DummyProc())),
+            mock.patch("lerobot.robots.so_follower.SOFollower", side_effect=_DummyRobot),
+        ):
+            session.start()
+            sano_pol = policies[0]
+            sano_pol.predict_calls = 0
+            # Run 10 ticks at 100 Hz: Chunk 0 takes 6 ticks (tick 0..5), then Chunk 1 + Chunk 2 take 2 ticks each -> 3 calls total
+            tick_target = 10
+            seen = 0
+
+            def _stop_after_10(_obs, _el) -> bool:
+                nonlocal seen
+                seen += 1
+                return seen > tick_target
+
+            rc = session.run_policy("sano", duration_s=2.0, fps=200, state_cb=_stop_after_10)
+            self.assertEqual(rc, 0)
+            self.assertEqual(sano_pol.predict_calls, 3)
+            session.close()
