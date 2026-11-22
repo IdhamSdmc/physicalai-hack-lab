@@ -643,3 +643,156 @@ class OpenCVTriageSupervisorTests(unittest.TestCase):
             self.assertEqual(rc, 0)
             self.assertEqual(sano_pol.predict_calls, 3)
             session.close()
+
+    def test_persistent_session_sets_per_policy_action_steps_and_retries_camera_timeout(self) -> None:
+        from collections import deque
+        from types import SimpleNamespace
+        import torch
+
+        class _CfgPolicy:
+            def __init__(self) -> None:
+                self.config = SimpleNamespace(temporal_ensemble_coeff=None, n_action_steps=100)
+                self._action_queue = deque(maxlen=100)
+
+            def to(self, _dev):
+                return self
+
+            def eval(self):
+                return self
+
+            def reset(self) -> None:
+                self._action_queue.clear()
+
+            def select_action(self, _batch: dict) -> torch.Tensor:
+                return torch.zeros((1, 6))
+
+        class _DummyProc:
+            def reset(self) -> None:
+                pass
+
+            def __call__(self, x):
+                return x
+
+        class _FlakyCam:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def async_read(self, timeout_ms: int = 200):
+                self.calls += 1
+                if self.calls == 1:
+                    raise TimeoutError("transient timeout")
+                return np.zeros((480, 640, 3), dtype=np.uint8)
+
+        class _DummyRobot:
+            def __init__(self, *_a, **_kw) -> None:
+                self.observation_features = {k: float for k in supervisor.DEFAULT_HOME_POSE}
+                self.action_features = dict(self.observation_features)
+                self.cameras = {"camera_top": _FlakyCam()}
+
+            def connect(self, calibrate: bool = False) -> None:
+                pass
+
+            def get_observation(self) -> dict:
+                return dict(supervisor.DEFAULT_HOME_POSE)
+
+            def disconnect(self) -> None:
+                pass
+
+        policies = [_CfgPolicy(), _CfgPolicy()]
+        p_it = iter(policies)
+        session = supervisor.PersistentTriageSession(
+            policy_sano_path=Path("s"),
+            policy_contaminado_path=Path("c"),
+            robot_port="/dev/null",
+            robot_id="test",
+            robot_type="so101_follower",
+            cam_top_idx=1,
+            cam_wrist_idx=0,
+            device="cpu",
+            n_action_steps=50,
+            n_action_steps_contaminado=35,
+        )
+        with (
+            mock.patch("lerobot.policies.act.modeling_act.ACTPolicy.from_pretrained", side_effect=lambda _p: next(p_it)),
+            mock.patch("lerobot.policies.factory.make_pre_post_processors", side_effect=lambda *_a, **_kw: (_DummyProc(), _DummyProc())),
+            mock.patch("lerobot.robots.so_follower.SOFollower", side_effect=_DummyRobot),
+        ):
+            session.start()
+            self.assertEqual(policies[0].config.n_action_steps, 50)
+            self.assertEqual(policies[1].config.n_action_steps, 35)
+            frame = session.capture_top_bgr(max_attempts=3)
+            self.assertEqual(frame.shape, (480, 640, 3))
+            self.assertGreaterEqual(session.robot.cameras["camera_top"].calls, 3)
+            session.close()
+
+    def test_early_stop_contaminado_handles_merged_cubes_in_desechos(self) -> None:
+        baseline = {
+            "verdes_en_A": 0,
+            "rojos_en_A": 1,
+            "verdes_en_B_SUP": 2,
+            "rojos_en_B_INF": 1,
+            "rojos_area_en_B_INF": 520.0,
+        }
+        tracker = supervisor.EarlyStopTracker(target_key="contaminado", baseline_counts=baseline)
+        # Second red cube drops touching the first in ZONA_B_INF -> contour count stays 1, but area doubles
+        merged_an = {
+            "verdes_en_A": 0,
+            "rojos_en_A": 0,
+            "verdes_en_B_SUP": 2,
+            "rojos_en_B_INF": 1,
+            "rojos_area_en_B_INF": 1040.0,
+        }
+        self.assertFalse(tracker.update_vision(merged_an, {"shoulder_pan.pos": -5.0, "shoulder_lift.pos": 10.0}, 11.0))
+        self.assertFalse(tracker.dropped_in_desechos)
+        self.assertFalse(tracker.update_vision(merged_an, {"shoulder_pan.pos": -5.0, "shoulder_lift.pos": 10.0}, 12.0))
+        self.assertTrue(tracker.dropped_in_desechos)
+        self.assertFalse(tracker.observe_robot_state({"shoulder_pan.pos": 0.0, "shoulder_lift.pos": 15.0}, 14.0))
+        self.assertTrue(tracker.observe_robot_state({"shoulder_pan.pos": -4.0, "shoulder_lift.pos": -35.0}, 16.0))
+
+    def test_parse_args_defaults_use_robust_contaminado_config(self) -> None:
+        args = supervisor.parse_args(["--mode", "run"])
+        self.assertEqual(args.duration_contaminado, 27.0)
+        self.assertEqual(args.n_action_steps, 50)
+        self.assertEqual(args.n_action_steps_contaminado, 35)
+        self.assertEqual(args.post_home_steps, 0)
+
+    def test_polygon_zona_a_treats_cubes_outside_curved_tape_as_lost(self) -> None:
+        cfg = supervisor.load_vision_config(Path("outputs/triage_vision_config.json"))
+        # Frame 640x480 with:
+        # 1) red cube inside curved ZONA_A cross (440, 125)
+        # 2) red cube pushed outside curved tape bottom-right (505, 198) -> inside bounding box [328,42,551,247], OUTSIDE tape arc
+        frame = np.full((480, 640, 3), 230, dtype=np.uint8)
+        cv2.rectangle(frame, (425, 110), (455, 140), (0, 0, 220), -1)
+        cv2.rectangle(frame, (490, 183), (520, 213), (0, 0, 220), -1)
+
+        an = supervisor.analyze_frame(frame, cfg)
+        self.assertEqual(an["rojos_en_A"], 1)
+        rois_by_x = {c.centroid[0]: c.roi for c in an["cubes"]}
+        self.assertEqual(rois_by_x[440], "ZONA_A")
+        self.assertIsNone(rois_by_x[505])
+
+    def test_supervisor_marks_lost_cube_outside_tape_and_continues_to_next_cube(self) -> None:
+        # Cycle 1 starts with 2 red cubes in A -> cube 1 knocked outside tape (rojos_en_A: 2->1, rojos_en_B_INF unchanged 0->0)
+        # -> Cycle 2 picks remaining red cube (1->0, rojos_en_B_INF: 0->1) -> Cycle 3 completed!
+        scenes = [
+            {"verdes_en_A": 0, "rojos_en_A": 2, "verdes_en_B_SUP": 2, "rojos_en_B_INF": 0, "target": "contaminado", "next_order": "R", "cubes": []},
+            {"verdes_en_A": 0, "rojos_en_A": 1, "verdes_en_B_SUP": 2, "rojos_en_B_INF": 0, "target": "contaminado", "next_order": "R", "cubes": []},
+            {"verdes_en_A": 0, "rojos_en_A": 1, "verdes_en_B_SUP": 2, "rojos_en_B_INF": 0, "target": "contaminado", "next_order": "R", "cubes": []},
+            {"verdes_en_A": 0, "rojos_en_A": 0, "verdes_en_B_SUP": 2, "rojos_en_B_INF": 1, "target": "completed", "next_order": "DONE", "cubes": []},
+            {"verdes_en_A": 0, "rojos_en_A": 0, "verdes_en_B_SUP": 2, "rojos_en_B_INF": 1, "target": "completed", "next_order": "DONE", "cubes": []},
+        ]
+        it = iter(scenes)
+        cfg = supervisor.default_vision_config()
+        rc = supervisor.run_autonomous_supervisor(
+            config=cfg,
+            policy_sano=Path(__file__),
+            policy_contaminado=Path(__file__),
+            robot_port="/dev/null",
+            robot_id="test",
+            robot_type="so101_follower",
+            cam_wrist_idx=0,
+            max_retries=0,  # Proves lost cube does NOT burn retries or abort!
+            scanner_fn=lambda: next(it),
+            runner_fn=lambda _cmd: 0,
+        )
+        self.assertEqual(rc, 0)

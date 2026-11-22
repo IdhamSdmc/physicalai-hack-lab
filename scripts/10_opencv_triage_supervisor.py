@@ -134,8 +134,24 @@ def _point_in_roi(cx: int, cy: int, roi_box: list[int] | tuple[int, int, int, in
     return min(x1, x2) <= cx <= max(x1, x2) and min(y1, y2) <= cy <= max(y1, y2)
 
 
-def _assign_roi(cx: int, cy: int, rois: dict[str, list[int]]) -> str | None:
+def _point_in_polygon(cx: int, cy: int, polygon: list[list[int]] | list[tuple[int, int]]) -> bool:
+    pts = np.asarray(polygon, dtype=np.int32)
+    return float(cv2.pointPolygonTest(pts, (float(cx), float(cy)), False)) >= 0.0
+
+
+def _assign_roi(
+    cx: int,
+    cy: int,
+    rois: dict[str, list[int]],
+    roi_polygons: dict[str, list[list[int]]] | None = None,
+) -> str | None:
+    polys = roi_polygons or {}
     for name in ("ZONA_A", "ZONA_B_SUP", "ZONA_B_INF", "VASO_D"):
+        poly = polys.get(name)
+        if poly and len(poly) >= 3:
+            if _point_in_polygon(cx, cy, poly):
+                return name
+            continue
         box = rois.get(name)
         if box and _point_in_roi(cx, cy, box):
             return name
@@ -173,6 +189,7 @@ def _extract_cubes_from_mask(
     rois: dict[str, list[int]],
     min_area: float,
     max_area: float,
+    roi_polygons: dict[str, list[list[int]]] | None = None,
 ) -> list[DetectedCube]:
     contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     cubes: list[DetectedCube] = []
@@ -183,7 +200,7 @@ def _extract_cubes_from_mask(
         x, y, w, h = cv2.boundingRect(cnt)
         cx = x + w // 2
         cy = y + h // 2
-        roi = _assign_roi(cx, cy, rois)
+        roi = _assign_roi(cx, cy, rois, roi_polygons=roi_polygons)
         cubes.append(DetectedCube(color=color_label, bbox=(x, y, w, h), centroid=(cx, cy), area=area, roi=roi))
     return cubes
 
@@ -201,17 +218,19 @@ def analyze_frame(frame_bgr: np.ndarray, config: dict[str, Any]) -> dict[str, An
     """Detect green (S) and red (C) cubes across ROIs and compute Clean-First counts."""
     mask_green, mask_red = compute_color_masks(frame_bgr, config)
     rois = config["rois"]
+    roi_polygons = config.get("roi_polygons")
     min_area = float(config.get("min_area_px", 180))
     max_area = float(config.get("max_area_px", 15000))
 
-    green_cubes = _extract_cubes_from_mask(mask_green, "S", rois, min_area, max_area)
-    red_cubes = _extract_cubes_from_mask(mask_red, "C", rois, min_area, max_area)
+    green_cubes = _extract_cubes_from_mask(mask_green, "S", rois, min_area, max_area, roi_polygons=roi_polygons)
+    red_cubes = _extract_cubes_from_mask(mask_red, "C", rois, min_area, max_area, roi_polygons=roi_polygons)
     all_cubes = green_cubes + red_cubes
 
     verdes_a = sum(1 for c in green_cubes if c.roi == "ZONA_A")
     rojos_a = sum(1 for c in red_cubes if c.roi == "ZONA_A")
     verdes_b_sup = sum(1 for c in green_cubes if c.roi == "ZONA_B_SUP")
     rojos_b_inf = sum(1 for c in red_cubes if c.roi == "ZONA_B_INF")
+    rojos_area_b_inf = float(sum(c.area for c in red_cubes if c.roi == "ZONA_B_INF"))
 
     target_key, next_order = determine_next_action(verdes_a, rojos_a)
     return {
@@ -222,6 +241,7 @@ def analyze_frame(frame_bgr: np.ndarray, config: dict[str, Any]) -> dict[str, An
         "rojos_en_A": rojos_a,
         "verdes_en_B_SUP": verdes_b_sup,
         "rojos_en_B_INF": rojos_b_inf,
+        "rojos_area_en_B_INF": round(rojos_area_b_inf, 1),
         "target": target_key,
         "next_order": next_order,
     }
@@ -368,6 +388,8 @@ class EarlyStopTracker:
         self.base_r_a = int(baseline_counts.get("rojos_en_A", 0))
         self.base_v_b = int(baseline_counts.get("verdes_en_B_SUP", 0))
         self.base_r_b = int(baseline_counts.get("rojos_en_B_INF", 0))
+        self.base_r_b_area = float(baseline_counts.get("rojos_area_en_B_INF", 0.0))
+        self._has_area_baseline = "rojos_area_en_B_INF" in baseline_counts
 
         self._lock = threading.Lock()
         self._sano_stable = 0
@@ -425,7 +447,15 @@ class EarlyStopTracker:
             # target_key == "contaminado"
             if elapsed_s < 10.0:
                 return False
-            if (r_b >= self.base_r_b + 1) and (r_a < self.base_r_a):
+            r_b_area = float(analysis.get("rojos_area_en_B_INF", 0.0))
+            merged_drop = (
+                self._has_area_baseline
+                and self.base_r_b > 0
+                and r_b >= 1
+                and "rojos_area_en_B_INF" in analysis
+                and r_b_area >= self.base_r_b_area + 250.0
+            )
+            if (r_b >= self.base_r_b + 1 or merged_drop) and (r_a < self.base_r_a):
                 self._desechos_stable += 1
                 if self._desechos_stable >= 2:
                     self.dropped_in_desechos = True
@@ -444,27 +474,38 @@ def render_hud(
     """Draw ROIs, cube bounding boxes/centroids, and jury-ready top HUD banner."""
     canvas = frame_bgr.copy()
     rois = config["rois"]
+    roi_polygons = config.get("roi_polygons") or {}
 
     for name in ROI_NAMES:
         box = rois.get(name)
-        if not box:
+        poly = roi_polygons.get(name)
+        if not box and not (poly and len(poly) >= 3):
             continue
-        x1, y1, x2, y2 = box
         color = ROI_COLORS_BGR.get(name, (200, 200, 200))
         thickness = 3 if active_roi == name else 2
-        cv2.rectangle(canvas, (x1, y1), (x2, y2), color, thickness)
+        if poly and len(poly) >= 3:
+            pts = np.asarray(poly, dtype=np.int32).reshape((-1, 1, 2))
+            cv2.polylines(canvas, [pts], True, color, thickness)
+            xs = [p[0] for p in poly]
+            ys = [p[1] for p in poly]
+            x_lbl, y_top, y_bot = min(xs), min(ys), max(ys)
+        else:
+            x1, y1, x2, y2 = box
+            cv2.rectangle(canvas, (x1, y1), (x2, y2), color, thickness)
+            x_lbl, y_top, y_bot = min(x1, x2), min(y1, y2), max(y1, y2)
         label = f"{name} [ACTIVA]" if active_roi == name else name
-        y_top, y_bot = min(y1, y2), max(y1, y2)
         label_y = (y_bot - 8) if y_top < 80 else (y_top - 6)
-        cv2.putText(canvas, label, (min(x1, x2) + 4, label_y), cv2.FONT_HERSHEY_SIMPLEX, 0.48, color, 2)
+        cv2.putText(canvas, label, (x_lbl + 4, label_y), cv2.FONT_HERSHEY_SIMPLEX, 0.48, color, 2)
 
     for cube in analysis["cubes"]:
         x, y, w, h = cube.bbox
         cx, cy = cube.centroid
-        box_color = (0, 255, 0) if cube.color == "S" else (0, 0, 255)
+        is_lost = cube.roi is None
+        box_color = (0, 215, 255) if is_lost else ((0, 255, 0) if cube.color == "S" else (0, 0, 255))
         cv2.rectangle(canvas, (x, y), (x + w, y + h), box_color, 2)
         cv2.circle(canvas, (cx, cy), 4, (255, 255, 255), -1)
-        cv2.putText(canvas, f"{cube.color} ({cx},{cy})", (x, max(y - 5, 16)), cv2.FONT_HERSHEY_SIMPLEX, 0.42, box_color, 2)
+        tag = f"{cube.color} PERDIDO ({cx},{cy})" if is_lost else f"{cube.color} ({cx},{cy})"
+        cv2.putText(canvas, tag, (x, max(y - 5, 16)), cv2.FONT_HERSHEY_SIMPLEX, 0.42, box_color, 2)
 
     # Top dark HUD banner
     h_img, w_img = canvas.shape[:2]
@@ -856,6 +897,7 @@ class PersistentTriageSession:
         device: str = "mps",
         max_relative_target: float = 30.0,
         n_action_steps: int = 50,
+        n_action_steps_contaminado: int = 35,
         post_home_action_steps: int = 0,
         temporal_ensemble_coeff: float | None = None,
     ) -> None:
@@ -870,6 +912,7 @@ class PersistentTriageSession:
         self.requested_device = device
         self.max_relative_target = float(max_relative_target)
         self.n_action_steps = int(n_action_steps)
+        self.n_action_steps_contaminado = int(n_action_steps_contaminado)
         self.post_home_action_steps = int(post_home_action_steps)
         self.temporal_ensemble_coeff = temporal_ensemble_coeff
 
@@ -902,13 +945,18 @@ class PersistentTriageSession:
 
         for key, p_path in self.policy_paths.items():
             policy = ACTPolicy.from_pretrained(str(p_path))
+            steps_for_key = (
+                self.n_action_steps_contaminado
+                if key == "contaminado" and self.n_action_steps_contaminado > 0
+                else self.n_action_steps
+            )
             if self.temporal_ensemble_coeff is not None and self.temporal_ensemble_coeff > 0:
                 policy.config.temporal_ensemble_coeff = float(self.temporal_ensemble_coeff)
                 policy.config.n_action_steps = 1
             else:
                 policy.config.temporal_ensemble_coeff = None
-                if self.n_action_steps > 0:
-                    policy.config.n_action_steps = self.n_action_steps
+                if steps_for_key > 0:
+                    policy.config.n_action_steps = steps_for_key
             policy.to(self.torch_device)
             policy.eval()
             policy.reset()
@@ -969,12 +1017,30 @@ class PersistentTriageSession:
     def go_home(self, duration_s: float = 1.6) -> None:
         _move_connected_robot_to_pose(self.robot, DEFAULT_HOME_POSE, duration_s=duration_s, label="HOME (persistente)")
 
-    def capture_top_bgr(self) -> np.ndarray:
+    def capture_top_bgr(self, max_attempts: int = 5) -> np.ndarray:
         time.sleep(0.12)
-        _ = self.robot.cameras["camera_top"].async_read()
-        time.sleep(0.05)
-        rgb = self.robot.cameras["camera_top"].async_read()
-        return cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+        cam = self.robot.cameras["camera_top"]
+        last_exc: Exception | None = None
+        for attempt in range(max_attempts):
+            try:
+                _ = cam.async_read(timeout_ms=600)
+                time.sleep(0.05)
+                rgb = cam.async_read(timeout_ms=600)
+            except TypeError:
+                # Fallback for mocks/cameras whose async_read() takes no timeout_ms kwarg
+                _ = cam.async_read()
+                time.sleep(0.05)
+                rgb = cam.async_read()
+            except (TimeoutError, RuntimeError) as exc:
+                last_exc = exc
+                time.sleep(0.08 * (attempt + 1))
+                continue
+            if rgb is not None and isinstance(rgb, np.ndarray) and rgb.size > 0:
+                return cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+            time.sleep(0.08)
+        if last_exc is not None:
+            raise last_exc
+        raise TimeoutError("camera_top no devolvió frame válido tras reintentos.")
 
     def run_policy(
         self,
@@ -1176,7 +1242,7 @@ def run_autonomous_supervisor(
     robot_type: str,
     cam_wrist_idx: int,
     duration_sano: float = 18.0,
-    duration_contaminado: float = 24.0,
+    duration_contaminado: float = 27.0,
     max_retries: int = 2,
     max_cycles: int = 12,
     warmup_frames: int = 15,
@@ -1184,6 +1250,7 @@ def run_autonomous_supervisor(
     go_home: bool = False,
     max_relative_target: float = 30.0,
     n_action_steps: int = 50,
+    n_action_steps_contaminado: int = 35,
     post_home_action_steps: int = 0,
     temporal_ensemble_coeff: float | None = None,
     remap_on_change: bool = True,
@@ -1218,6 +1285,7 @@ def run_autonomous_supervisor(
             height=int(config["height"]),
             max_relative_target=max_relative_target,
             n_action_steps=n_action_steps,
+            n_action_steps_contaminado=n_action_steps_contaminado,
             post_home_action_steps=post_home_action_steps,
             temporal_ensemble_coeff=temporal_ensemble_coeff,
         )
@@ -1244,6 +1312,7 @@ def run_autonomous_supervisor(
 
     execute_rollout = runner_fn or _default_rollout_runner
     retries_by_target = {"sano": 0, "contaminado": 0}
+    lost_counts = {"sano": 0, "contaminado": 0}
     last_map: dict[str, Any] | None = None
     release_on_finally = (not dry_run and not is_mocked) and session is None
 
@@ -1280,7 +1349,14 @@ def run_autonomous_supervisor(
             print(f"[CICLO {cycle}] ZONA A: {v_count} Sanos (S) | {r_count} Contaminados (C) -> {analysis['next_order']}")
 
             if target == "completed":
-                print("✅ MISIÓN COMPLETADA: ZONA A DESPEJADA Y CLASIFICADA SIN CONTAMINACIÓN CRUZADA")
+                total_lost = lost_counts["sano"] + lost_counts["contaminado"]
+                if total_lost > 0:
+                    print(
+                        "✅ MISIÓN COMPLETADA: ZONA A DESPEJADA "
+                        f"(cubos perdidos fuera de la cinta omitidos: S={lost_counts['sano']}, C={lost_counts['contaminado']})"
+                    )
+                else:
+                    print("✅ MISIÓN COMPLETADA: ZONA A DESPEJADA Y CLASIFICADA SIN CONTAMINACIÓN CRUZADA")
                 return 0
 
             if target == "sano":
@@ -1288,16 +1364,25 @@ def run_autonomous_supervisor(
                 duration_s = duration_sano
                 prev_count = v_count
                 count_key = "verdes_en_A"
+                dest_key = "verdes_en_B_SUP"
             else:
                 policy_path = policy_contaminado
                 duration_s = duration_contaminado
                 prev_count = r_count
                 count_key = "rojos_en_A"
+                dest_key = "rojos_en_B_INF"
+            prev_dest_count = int(analysis.get(dest_key, 0))
+            prev_dest_area = float(analysis.get("rojos_area_en_B_INF", 0.0)) if target == "contaminado" else 0.0
 
             if not dry_run and not policy_path.exists():
                 print(f"[ERROR] Checkpoint no encontrado para '{target}': {policy_path}", file=sys.stderr)
                 return 2
 
+            rollout_steps = (
+                n_action_steps_contaminado
+                if target == "contaminado" and n_action_steps_contaminado > 0
+                else n_action_steps
+            )
             cmd = build_rollout_command(
                 policy_path=policy_path,
                 duration_s=duration_s,
@@ -1307,7 +1392,7 @@ def run_autonomous_supervisor(
                 cam_top_idx=cam_top_idx,
                 cam_wrist_idx=cam_wrist_idx,
                 max_relative_target=max_relative_target,
-                n_action_steps=n_action_steps,
+                n_action_steps=rollout_steps,
                 temporal_ensemble_coeff=temporal_ensemble_coeff,
                 disable_torque_on_disconnect=False,
             )
@@ -1317,7 +1402,10 @@ def run_autonomous_supervisor(
                 return 0
 
             if session is not None:
-                tracker = EarlyStopTracker(target_key=target, baseline_counts=curr_map["counts"])
+                tracker_counts = dict(curr_map["counts"])
+                if "rojos_area_en_B_INF" in analysis:
+                    tracker_counts["rojos_area_en_B_INF"] = float(analysis["rojos_area_en_B_INF"])
+                tracker = EarlyStopTracker(target_key=target, baseline_counts=tracker_counts)
 
                 def _on_live_frame(
                     top_bgr: np.ndarray,
@@ -1366,7 +1454,26 @@ def run_autonomous_supervisor(
 
             new_count = int(post_analysis[count_key])
             if new_count < prev_count:
-                print(f"[VERIFICACIÓN OK] {target}: {prev_count} -> {new_count} en ZONA_A.")
+                delta_left = prev_count - new_count
+                post_dest_count = int(post_analysis.get(dest_key, 0))
+                post_dest_area = float(post_analysis.get("rojos_area_en_B_INF", 0.0)) if target == "contaminado" else 0.0
+                merged_dest_drop = (
+                    target == "contaminado"
+                    and prev_dest_count > 0
+                    and post_dest_count >= 1
+                    and post_dest_area >= prev_dest_area + 250.0
+                )
+                has_dest_counts = (dest_key in post_analysis) or (dest_key in analysis)
+                evacuated_to_dest = (post_dest_count > prev_dest_count) or merged_dest_drop
+                if evacuated_to_dest or not has_dest_counts:
+                    print(f"[VERIFICACIÓN OK] {target}: {prev_count} -> {new_count} en ZONA_A.")
+                else:
+                    lost_counts[target] += delta_left
+                    print(
+                        f"⚠️ [CUBO PERDIDO] {target}: {delta_left} cubo(s) salió de la cinta "
+                        f"({prev_count} -> {new_count} en ZONA_A, sin llegar a {dest_key}). "
+                        "Se marca como perdido y seguimos con el siguiente cubo."
+                    )
                 retries_by_target[target] = 0
             else:
                 fail_hud_path = hud_path.with_name("debug_last_fail.jpg")
@@ -1437,9 +1544,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--policy-sano", type=Path, default=DEFAULT_POLICY_SANO)
     parser.add_argument("--policy-contaminado", type=Path, default=DEFAULT_POLICY_CONTAMINADO)
     parser.add_argument("--duration-sano", type=float, default=18.0)
-    parser.add_argument("--duration-contaminado", type=float, default=24.0)
+    parser.add_argument("--duration-contaminado", type=float, default=27.0)
     parser.add_argument("--max-relative-target", type=float, default=30.0, help="Límite relativo por paso (30.0 permite cierre rápido de pinza).")
-    parser.add_argument("--n-action-steps", type=int, default=50, help="Pasos para el primer chunk en HOME (50 = ~1.9s).")
+    parser.add_argument("--n-action-steps", type=int, default=50, help="Pasos por chunk para act_sano (50 = ~2.0s).")
+    parser.add_argument(
+        "--n-action-steps-contaminado",
+        type=int,
+        default=35,
+        help="Pasos por chunk para act_contaminado (35 = ~1.4s; 0 usa --n-action-steps).",
+    )
     parser.add_argument(
         "--post-home-steps",
         type=int,
@@ -1491,6 +1604,7 @@ def main(argv: list[str] | None = None) -> int:
         go_home=not args.no_go_home,
         max_relative_target=args.max_relative_target,
         n_action_steps=args.n_action_steps,
+        n_action_steps_contaminado=args.n_action_steps_contaminado,
         post_home_action_steps=args.post_home_steps,
         temporal_ensemble_coeff=te_coeff,
         remap_on_change=not args.no_remap_on_change,

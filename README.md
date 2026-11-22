@@ -6,13 +6,13 @@ Kit de preparación, validación pre-vuelo, auditoría de datos, entrenamiento d
 
 ## Repositorios y Recursos en Hugging Face
 
-- **Políticas Dual ACT V4 (Producción):** [`coalva94/act_sano_v4`](https://huggingface.co/coalva94/act_sano_v4) · [`coalva94/act_contaminado_v4`](https://huggingface.co/coalva94/act_contaminado_v4)
+- **Políticas Dual ACT Activas (Producción):** [`coalva94/act_sano_v3`](https://huggingface.co/coalva94/act_sano_v3) (`24k` steps, evacuación de cubos sanos) + [`coalva94/act_contaminado_v4`](https://huggingface.co/coalva94/act_contaminado_v4) (`15k` steps sobre dataset V4 optimizado, `1.71°` MAE en ventana de agarre across 13 escenarios)
+- **Modelos Alternativos / Respaldo HF:** [`coalva94/act_sano_v4`](https://huggingface.co/coalva94/act_sano_v4) · [`coalva94/act_contaminado_v3`](https://huggingface.co/coalva94/act_contaminado_v3)
 - **Dataset Optimizado Contaminado V4 (`159` eps limpios, sin tiempos muertos):** [`coalva94/bilbao_triage_contaminado_v4`](https://huggingface.co/datasets/coalva94/bilbao_triage_contaminado_v4)
 - **Dataset Completo Auditado V3 (`192` eps limpios / `200` grabados):** [`coalva94/bilbao_triage_complete_v3`](https://huggingface.co/datasets/coalva94/bilbao_triage_complete_v3)
 - **Subconjuntos V3 (`96` + `96` eps):** [`coalva94/bilbao_triage_sano_v3`](https://huggingface.co/datasets/coalva94/bilbao_triage_sano_v3) · [`coalva94/bilbao_triage_contaminado_v3`](https://huggingface.co/datasets/coalva94/bilbao_triage_contaminado_v3)
-- **Modelos V3 Previos:** [`coalva94/act_sano_v3`](https://huggingface.co/coalva94/act_sano_v3) · [`coalva94/act_contaminado_v3`](https://huggingface.co/coalva94/act_contaminado_v3)
 - **Panel Web Dual-View (iPad + 3D + OpenCV HUD):** [`coalva94/web-io-robot`](https://github.com/coalva94/web-io-robot)
-- **Supervisor Autónomo OpenCV + Sesión Persistente:** [`scripts/10_opencv_triage_supervisor.py`](scripts/10_opencv_triage_supervisor.py) (prioridad *Clean-First*, detección en vivo `~3.2 Hz`, `EarlyStopTracker`, re-mapeo automático ante golpes y retorno seguro `lift_first` a `HOME`).
+- **Supervisor Autónomo OpenCV + Sesión Persistente:** [`scripts/10_opencv_triage_supervisor.py`](scripts/10_opencv_triage_supervisor.py) (prioridad *Clean-First*, polígono curvo `ZONA_A` sobre la cinta, descarte automático de cubos perdidos fuera de cinta, chunks `50`/`35` pasos para `sano`/`contaminado`, `EarlyStopTracker`, reintentos ante fallos UVC de cámara y retorno `lift_first` a `HOME`).
 - **Entrenamiento Dual ACT:** [`scripts/train_dual_act_triage.sh`](scripts/train_dual_act_triage.sh) y bitácora de captura en [`NOTAS_EPISODIOS_64.md`](NOTAS_EPISODIOS_64.md).
 
 ---
