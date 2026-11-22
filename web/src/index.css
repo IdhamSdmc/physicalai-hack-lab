@@ -1,0 +1,172 @@
+@import "tailwindcss";
+
+:root {
+  --color-eroski-red: #d91b24;
+  --color-eroski-red-dark: #b91c1c;
+  --color-fresh-green: #15803d;
+  --color-fresh-emerald: #10b981;
+  --color-sensor-sky: #0284c7;
+  --color-slate-ink: #0f172a;
+
+  --glass-bg: rgba(255, 255, 255, 0.82);
+  --glass-border: rgba(255, 255, 255, 0.65);
+  --glass-shadow:
+    0 20px 40px -15px rgba(0, 0, 0, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.95);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-padding-top: calc(4.5rem + env(safe-area-inset-top, 0px));
+  scroll-padding-bottom: calc(5.5rem + env(safe-area-inset-bottom, 0px));
+}
+
+html,
+body {
+  margin: 0;
+  min-height: 100dvh;
+  font-family: "Plus Jakarta Sans", system-ui, -apple-system, sans-serif;
+  color: #0f172a;
+  line-height: 1.45;
+  overflow-wrap: break-word;
+  -webkit-font-smoothing: antialiased;
+  background:
+    radial-gradient(circle at 10% 10%, rgba(217, 27, 36, 0.08) 0%, transparent 40%),
+    radial-gradient(circle at 90% 15%, rgba(21, 128, 61, 0.10) 0%, transparent 42%),
+    radial-gradient(circle at 50% 95%, rgba(2, 132, 197, 0.08) 0%, transparent 50%),
+    linear-gradient(165deg, #eef2f6 0%, #f8fafc 50%, #e2e8f0 100%);
+  background-attachment: fixed;
+}
+
+.font-mono {
+  font-family: "JetBrains Mono", monospace !important;
+}
+
+/* Liquid Glass Treatments (iPadOS industrial aesthetic) */
+.liquid-panel {
+  background: rgba(255, 255, 255, 0.82);
+  backdrop-filter: blur(24px) saturate(180%);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
+  border: 1px solid rgba(255, 255, 255, 0.70);
+  box-shadow: 0 16px 36px -12px rgba(15, 23, 42, 0.08), inset 0 1px 0 rgba(255, 255, 255, 0.9);
+}
+
+.liquid-panel-strong {
+  background: rgba(255, 255, 255, 0.92);
+  backdrop-filter: blur(28px) saturate(190%);
+  -webkit-backdrop-filter: blur(28px) saturate(190%);
+  border: 1px solid rgba(255, 255, 255, 0.85);
+  box-shadow: 0 20px 44px -14px rgba(15, 23, 42, 0.10), inset 0 1px 0 rgba(255, 255, 255, 0.95);
+}
+
+.liquid-dark-pill {
+  background: rgba(15, 23, 42, 0.75);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  border: 1px solid rgba(255, 255, 255, 0.20);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+}
+
+.shadow-liquid-glow {
+  box-shadow: 0 10px 30px -5px rgba(21, 128, 61, 0.35);
+}
+
+.shadow-stop-glow {
+  box-shadow: 0 10px 30px -5px rgba(217, 27, 36, 0.38);
+}
+
+button {
+  touch-action: manipulation;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  transition: transform 120ms ease-out, box-shadow 150ms ease-out, filter 150ms ease-out, opacity 150ms ease-out;
+}
+
+button:focus-visible {
+  outline: 2.5px solid #0284c7;
+  outline-offset: 2px;
+}
+
+button:active:not(:disabled) {
+  transform: scale(0.98);
+}
+
+/* Three.js viewport canvas handling */
+#scene-container canvas {
+  display: block;
+  width: 100% !important;
+  height: 100% !important;
+  border-radius: inherit;
+}
+
+/* Hide scrollbars for clean iPad tabs */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/* Container-aware control buttons (never clip or overlap on iPad/mobile) */
+.controls-container {
+  container-type: inline-size;
+}
+
+.controls-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.75rem;
+}
+
+@media (min-width: 640px) {
+  .controls-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@supports (container-type: inline-size) {
+  @media (min-width: 640px) {
+    .controls-grid {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  @container (min-width: 340px) {
+    .controls-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+  }
+}
+
+@media (pointer: coarse) {
+  .touch-target {
+    min-block-size: 44px;
+    min-inline-size: 44px;
+  }
+}
+
+.bottom-dock {
+  bottom: max(0.75rem, env(safe-area-inset-bottom, 0px));
+}
+
+.app-header-safe {
+  padding-top: calc(0.5rem + env(safe-area-inset-top, 0px));
+  padding-left: max(0.75rem, env(safe-area-inset-left, 0px));
+  padding-right: max(0.75rem, env(safe-area-inset-right, 0px));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  button,
+  .animate-pulse,
+  .animate-ping {
+    transition: none !important;
+    animation: none !important;
+  }
+  button:active:not(:disabled) {
+    transform: none !important;
+  }
+}

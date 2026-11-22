@@ -44,6 +44,7 @@ trackio/
 *.jpeg
 *.png
 *.webp
+!web/static/**/*.jpg
 
 # 5. Secretos, tokens (HF_TOKEN, WANDB_API_KEY) y overrides locales de puertos
 .env

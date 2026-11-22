@@ -1,0 +1,50 @@
+PROMPT PARA GOOGLE STITCH
+=========================
+Rediseña (mejora visualmente) este panel web de control para un brazo robótico, manteniendo estructura y funciones. Idioma: español. Formato: iPad / desktop (responsive, también móvil).
+
+PRODUCTO
+"Estación Autónoma SO-101" · Supermercado · Frutería Control de Calidad. Un robot separa fruta (manzanas) en cestas y aplica higiene UV. El panel es un mando remoto: iniciar, parar y ver estado.
+
+ESTILO ACTUAL (a mejorar, no genérico)
+- Estética "Liquid Glass" estilo iPadOS: tarjetas translúcidas con blur, bordes blancos suaves, sombras difusas.
+- Fondo claro (foto de supermercado difuminada).
+- Colores de marca: rojo #d91b24, verde #15803d, acentos esmeralda, cielo (sky) y slate.
+- Tipografía sans del sistema, títulos extra-bold, etiquetas en mayúsculas con letter-spacing, cifras en monoespaciada.
+- Radios grandes (18–28px), botones grandes táctiles.
+
+LAYOUT
+1. CABECERA flotante (glass, radio 22px, línea superior de 3px con degradado rojo→verde):
+   - Logo cuadrado rojo con "S".
+   - Sobretítulo verde en mayúsculas: "Supermercado · Frutería Control de Calidad".
+   - Título: "Estación Autónoma SO-101".
+   - Derecha: pastilla de conexión "Conectado" (verde, icono wifi) / "Sin conexión" (rojo).
+2. ÁREA PRINCIPAL, 2 columnas en desktop (1.4fr / 0.95fr), 1 columna en móvil:
+   a) IZQUIERDA: visor 3D grande (escena three.js de un lineal de frutería con cestas/cajas "Zona A" etc. y manzanas). Abajo centrado, selector flotante tipo píldora con 3 vistas: Isométrica, Frontal, Superior (con iconos).
+   b) DERECHA, consola vertical:
+      - Tarjeta "ESTADO DE LA ESTACIÓN" + cronómetro mm:ss en píldora monoespaciada.
+        · Banda de estado grande en mayúsculas: LIBRE / EJECUTANDO / DETENIDO / ERROR (punto de color + texto + "En curso"/"En espera").
+        · Barra de progreso con degradado verde→azul.
+        · 3 fases: "1. Recogida", "2. Clasificación", "3. Higiene UV" (la activa resaltada en esmeralda).
+        · Mensaje de estado en texto pequeño.
+      - Dos botones grandes (min-alto 78px): verde "Iniciar selección" (icono play; subtítulo "Comenzar ciclo de frutería") y rojo "Parar (STOP)" (icono octágono; subtítulo "Parada de emergencia"). Los subtítulos solo se ven en iPad/desktop, no en móvil. Estados deshabilitados con opacidad.
+      - 3 mini-tarjetas métricas: "Ciclos" (número), "Higiene UV" ("Protocolo activo"/"Lista"), "Último" (duración mm:ss o --:--).
+      - Toast de confirmación/error (verde o rojo).
+      - Barra inferior: "Centrar vista" (icono rotar) y "Registro de actividad" (icono terminal).
+3. CAJÓN DE REGISTRO desplegable (glass): título "Registro de actividad", botones "Limpiar" y cerrar (X), texto monoespaciado con líneas tipo "[14:02:11] Ciclo iniciado".
+
+REGLAS DE UX
+- Solo 3 controles: iniciar, parar, ver estado (+ log opcional). Nada más.
+- STOP siempre visible y de alto contraste.
+- Accesible: contraste AA, objetivos táctiles ≥ 44px, aria-live en estado.
+
+PEDIDO
+Propón una versión más moderna, con identidad propia (no plantilla genérica): jerarquía clara, el visor 3D como protagonista, estados muy legibles de un vistazo, microinteracciones sutiles y modo claro. Entrega pantallas: Desktop, iPad y Móvil; estados: libre, ejecutando, detenido, error, sin conexión, registro abierto.
+
+----- CSS DE REFERENCIA (tokens) -----
+--accent-red:#d91b24; --accent-green:#15803d;
+--glass-bg:#ffffff94; --glass-bg-strong:#ffffffc2; --glass-border:#ffffffb8;
+--glass-shadow: inset 0 1px 0 #ffffffe6, 0 12px 32px -12px #0f172a24, 0 2px 6px #0f172a0d;
+texto base #0f172a; radios 18/20/22/24/28px.
+Botón inicio: linear-gradient(180deg, rgba(22,163,74,.92), rgba(21,128,61,.96)).
+Botón stop: linear-gradient(180deg, rgba(239,68,68,.92), rgba(185,28,28,.96)).
+Progreso: linear-gradient(90deg,#16a34a,#0ea5e9). Cabecera: linear-gradient(90deg,#d91b24,#15803d).

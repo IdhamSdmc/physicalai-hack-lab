@@ -1,0 +1,11 @@
+{
+  "name": "Estación Autónoma SO-101 · SUPERMARKET 5.12",
+  "short_name": "SO-101 5.12",
+  "description": "Panel de control y supervisión dual para el robot SO-101.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#eef2f6",
+  "theme_color": "#d91b24"
+}

@@ -1,0 +1,15 @@
+# Configuración local y bundles pesados de diseño
+config.yaml
+.netlify/
+frontend_design.zip
+*.zip
+
+# Node / Vite build
+node_modules/
+dist/
+
+# Entorno virtual y caché de Python
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
