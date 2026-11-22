@@ -753,7 +753,7 @@ class OpenCVTriageSupervisorTests(unittest.TestCase):
         args = supervisor.parse_args(["--mode", "run"])
         self.assertEqual(args.duration_contaminado, 27.0)
         self.assertEqual(args.n_action_steps, 50)
-        self.assertEqual(args.n_action_steps_contaminado, 35)
+        self.assertEqual(args.n_action_steps_contaminado, 60)
         self.assertEqual(args.post_home_steps, 0)
 
     def test_polygon_zona_a_treats_cubes_outside_curved_tape_as_lost(self) -> None:

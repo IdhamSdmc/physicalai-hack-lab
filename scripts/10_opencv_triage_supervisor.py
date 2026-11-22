@@ -897,7 +897,7 @@ class PersistentTriageSession:
         device: str = "mps",
         max_relative_target: float = 30.0,
         n_action_steps: int = 50,
-        n_action_steps_contaminado: int = 35,
+        n_action_steps_contaminado: int = 60,
         post_home_action_steps: int = 0,
         temporal_ensemble_coeff: float | None = None,
     ) -> None:
@@ -1250,7 +1250,7 @@ def run_autonomous_supervisor(
     go_home: bool = False,
     max_relative_target: float = 30.0,
     n_action_steps: int = 50,
-    n_action_steps_contaminado: int = 35,
+    n_action_steps_contaminado: int = 60,
     post_home_action_steps: int = 0,
     temporal_ensemble_coeff: float | None = None,
     remap_on_change: bool = True,
@@ -1550,8 +1550,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--n-action-steps-contaminado",
         type=int,
-        default=35,
-        help="Pasos por chunk para act_contaminado (35 = ~1.4s; 0 usa --n-action-steps).",
+        default=60,
+        help="Pasos por chunk para act_contaminado (60 = ~2.5s, supera la pausa inicial en HOME; 0 usa --n-action-steps).",
     )
     parser.add_argument(
         "--post-home-steps",
