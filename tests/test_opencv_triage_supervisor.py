@@ -796,3 +796,28 @@ class OpenCVTriageSupervisorTests(unittest.TestCase):
             runner_fn=lambda _cmd: 0,
         )
         self.assertEqual(rc, 0)
+
+    def test_early_stop_tracks_lost_red_cube_outside_tape_and_awaits_vaso_d(self) -> None:
+        baseline = {
+            "verdes_en_A": 0,
+            "rojos_en_A": 1,
+            "verdes_en_B_SUP": 2,
+            "rojos_en_B_INF": 1,
+            "rojos_perdidos": 0,
+        }
+        tracker = supervisor.EarlyStopTracker(target_key="contaminado", baseline_counts=baseline)
+        lost_an = {
+            "verdes_en_A": 0,
+            "rojos_en_A": 0,
+            "verdes_en_B_SUP": 2,
+            "rojos_en_B_INF": 1,
+            "rojos_perdidos": 1,
+        }
+        # Stable 2 frames after 10s marks dropped/lost so observe_robot_state completes cleanly right after VASO D dip
+        self.assertFalse(tracker.update_vision(lost_an, {"shoulder_pan.pos": -30.0, "shoulder_lift.pos": 10.0}, 11.0))
+        self.assertFalse(tracker.update_vision(lost_an, {"shoulder_pan.pos": -20.0, "shoulder_lift.pos": 0.0}, 11.5))
+        self.assertTrue(tracker.dropped_in_desechos)
+        self.assertTrue(tracker.lost_outside_tape)
+        self.assertFalse(tracker.observe_robot_state({"shoulder_pan.pos": -1.5, "shoulder_lift.pos": 48.0}, 13.0))
+        self.assertTrue(tracker.visited_vaso_d)
+        self.assertTrue(tracker.observe_robot_state({"shoulder_pan.pos": -4.0, "shoulder_lift.pos": -35.0}, 15.0))

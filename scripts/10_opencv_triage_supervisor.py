@@ -55,6 +55,16 @@ DEFAULT_HOME_POSE: dict[str, float] = {
     "gripper.pos": 1.4,
 }
 
+# Postura media VASO D medida sobre los episodios del dataset V4 (baño de bioseguridad)
+DEFAULT_VASO_D_POSE: dict[str, float] = {
+    "shoulder_pan.pos": -1.5,
+    "shoulder_lift.pos": 49.9,
+    "elbow_flex.pos": -37.9,
+    "wrist_flex.pos": 66.7,
+    "wrist_roll.pos": -1.0,
+    "gripper.pos": 1.4,
+}
+
 ROI_NAMES = ("ZONA_A", "ZONA_B_SUP", "ZONA_B_INF", "VASO_D")
 ROI_COLORS_BGR = {
     "ZONA_A": (255, 200, 0),      # Cyan/Azul claro
@@ -230,6 +240,8 @@ def analyze_frame(frame_bgr: np.ndarray, config: dict[str, Any]) -> dict[str, An
     rojos_a = sum(1 for c in red_cubes if c.roi == "ZONA_A")
     verdes_b_sup = sum(1 for c in green_cubes if c.roi == "ZONA_B_SUP")
     rojos_b_inf = sum(1 for c in red_cubes if c.roi == "ZONA_B_INF")
+    verdes_perdidos = sum(1 for c in green_cubes if c.roi is None)
+    rojos_perdidos = sum(1 for c in red_cubes if c.roi is None)
     rojos_area_b_inf = float(sum(c.area for c in red_cubes if c.roi == "ZONA_B_INF"))
 
     target_key, next_order = determine_next_action(verdes_a, rojos_a)
@@ -241,6 +253,8 @@ def analyze_frame(frame_bgr: np.ndarray, config: dict[str, Any]) -> dict[str, An
         "rojos_en_A": rojos_a,
         "verdes_en_B_SUP": verdes_b_sup,
         "rojos_en_B_INF": rojos_b_inf,
+        "verdes_perdidos": verdes_perdidos,
+        "rojos_perdidos": rojos_perdidos,
         "rojos_area_en_B_INF": round(rojos_area_b_inf, 1),
         "target": target_key,
         "next_order": next_order,
@@ -388,6 +402,8 @@ class EarlyStopTracker:
         self.base_r_a = int(baseline_counts.get("rojos_en_A", 0))
         self.base_v_b = int(baseline_counts.get("verdes_en_B_SUP", 0))
         self.base_r_b = int(baseline_counts.get("rojos_en_B_INF", 0))
+        self.base_v_lost = int(baseline_counts.get("verdes_perdidos", 0))
+        self.base_r_lost = int(baseline_counts.get("rojos_perdidos", 0))
         self.base_r_b_area = float(baseline_counts.get("rojos_area_en_B_INF", 0.0))
         self._has_area_baseline = "rojos_area_en_B_INF" in baseline_counts
 
@@ -395,6 +411,7 @@ class EarlyStopTracker:
         self._sano_stable = 0
         self._desechos_stable = 0
         self.dropped_in_desechos = False
+        self.lost_outside_tape = False
         self.visited_vaso_d = False
         self.stop_reason: str | None = None
 
@@ -425,6 +442,8 @@ class EarlyStopTracker:
             r_a = int(analysis.get("rojos_en_A", 0))
             v_b = int(analysis.get("verdes_en_B_SUP", 0))
             r_b = int(analysis.get("rojos_en_B_INF", 0))
+            v_lost = int(analysis.get("verdes_perdidos", 0))
+            r_lost = int(analysis.get("rojos_perdidos", 0))
             pan = float(obs_state.get("shoulder_pan.pos", 0.0))
             lift = float(obs_state.get("shoulder_lift.pos", 0.0))
 
@@ -432,13 +451,20 @@ class EarlyStopTracker:
                 if elapsed_s < 7.0:
                     return False
                 placed = (v_b >= self.base_v_b + 1) and (v_a < self.base_v_a)
+                lost_out = (v_lost >= self.base_v_lost + 1) and (v_a < self.base_v_a)
                 arm_clear = (lift <= -25.0) or (abs(pan) <= 20.0)
-                if placed and arm_clear:
+                if (placed or lost_out) and arm_clear:
                     self._sano_stable += 1
                     if self._sano_stable >= 3:
-                        self.stop_reason = (
-                            f"Cubo verde confirmado en Almacén ({v_b}) a los {elapsed_s:.1f}s -> retorno a HOME."
-                        )
+                        if lost_out and not placed:
+                            self.lost_outside_tape = True
+                            self.stop_reason = (
+                                f"Cubo verde salió de la cinta a los {elapsed_s:.1f}s -> considerado perdido, retorno a HOME."
+                            )
+                        else:
+                            self.stop_reason = (
+                                f"Cubo verde confirmado en Almacén ({v_b}) a los {elapsed_s:.1f}s -> retorno a HOME."
+                            )
                         return True
                 else:
                     self._sano_stable = 0
@@ -455,10 +481,13 @@ class EarlyStopTracker:
                 and "rojos_area_en_B_INF" in analysis
                 and r_b_area >= self.base_r_b_area + 250.0
             )
-            if (r_b >= self.base_r_b + 1 or merged_drop) and (r_a < self.base_r_a):
+            lost_red_out = (r_lost >= self.base_r_lost + 1) and (r_a < self.base_r_a)
+            if (r_b >= self.base_r_b + 1 or merged_drop or lost_red_out) and (r_a < self.base_r_a):
                 self._desechos_stable += 1
                 if self._desechos_stable >= 2:
                     self.dropped_in_desechos = True
+                    if lost_red_out and r_b < self.base_r_b + 1 and not merged_drop:
+                        self.lost_outside_tape = True
             elif not self.dropped_in_desechos:
                 self._desechos_stable = 0
             return False
@@ -1017,6 +1046,24 @@ class PersistentTriageSession:
     def go_home(self, duration_s: float = 1.6) -> None:
         _move_connected_robot_to_pose(self.robot, DEFAULT_HOME_POSE, duration_s=duration_s, label="HOME (persistente)")
 
+    def dip_vaso_d(self, duration_down_s: float = 1.2, hold_s: float = 0.4, duration_up_s: float = 1.2) -> None:
+        """Perform deterministic biosecurity dip into VASO D and return safely to HOME."""
+        _move_connected_robot_to_pose(
+            self.robot,
+            DEFAULT_VASO_D_POSE,
+            duration_s=duration_down_s,
+            label="VASO D (desinfección)",
+            lift_first=False,
+        )
+        time.sleep(hold_s)
+        _move_connected_robot_to_pose(
+            self.robot,
+            DEFAULT_HOME_POSE,
+            duration_s=duration_up_s,
+            label="HOME (post-desinfección)",
+            lift_first=True,
+        )
+
     def capture_top_bgr(self, max_attempts: int = 5) -> np.ndarray:
         time.sleep(0.12)
         cam = self.robot.cameras["camera_top"]
@@ -1401,11 +1448,14 @@ def run_autonomous_supervisor(
                 print(f"[DRY-RUN] Ejecutaría: {' '.join(cmd)}")
                 return 0
 
+            tracker_ref: EarlyStopTracker | None = None
             if session is not None:
                 tracker_counts = dict(curr_map["counts"])
-                if "rojos_area_en_B_INF" in analysis:
-                    tracker_counts["rojos_area_en_B_INF"] = float(analysis["rojos_area_en_B_INF"])
+                for extra_k in ("rojos_area_en_B_INF", "verdes_perdidos", "rojos_perdidos"):
+                    if extra_k in analysis:
+                        tracker_counts[extra_k] = analysis[extra_k]
                 tracker = EarlyStopTracker(target_key=target, baseline_counts=tracker_counts)
+                tracker_ref = tracker
 
                 def _on_live_frame(
                     top_bgr: np.ndarray,
@@ -1472,8 +1522,20 @@ def run_autonomous_supervisor(
                     print(
                         f"⚠️ [CUBO PERDIDO] {target}: {delta_left} cubo(s) salió de la cinta "
                         f"({prev_count} -> {new_count} en ZONA_A, sin llegar a {dest_key}). "
-                        "Se marca como perdido y seguimos con el siguiente cubo."
+                        "Se considera bueno/omitido y seguimos con el siguiente."
                     )
+                    if target == "contaminado" and new_count == 0:
+                        already_disinfected = tracker_ref is not None and tracker_ref.visited_vaso_d
+                        if already_disinfected:
+                            print("🧼 [BIOSEGURIDAD] Desinfección en VASO D ya completada tras el último rojo.")
+                        elif session is not None and not dry_run and not is_mocked:
+                            print("🧼 [BIOSEGURIDAD] Último cubo rojo salió de la cinta -> desinfectando en VASO D y terminando ciclo.")
+                            session.dip_vaso_d()
+                        elif not dry_run and not is_mocked:
+                            print("🧼 [BIOSEGURIDAD] Último cubo rojo salió de la cinta -> ejecutando baño en VASO D.")
+                            move_robot_to_home(robot_port=robot_port, robot_id=robot_id, duration_s=1.2, keep_torque=True, target_pose=DEFAULT_VASO_D_POSE)
+                            time.sleep(0.4)
+                            move_robot_to_home(robot_port=robot_port, robot_id=robot_id, duration_s=1.2, keep_torque=True, target_pose=DEFAULT_HOME_POSE)
                 retries_by_target[target] = 0
             else:
                 fail_hud_path = hud_path.with_name("debug_last_fail.jpg")
