@@ -821,3 +821,16 @@ class OpenCVTriageSupervisorTests(unittest.TestCase):
         self.assertFalse(tracker.observe_robot_state({"shoulder_pan.pos": -1.5, "shoulder_lift.pos": 48.0}, 13.0))
         self.assertTrue(tracker.visited_vaso_d)
         self.assertTrue(tracker.observe_robot_state({"shoulder_pan.pos": -4.0, "shoulder_lift.pos": -35.0}, 15.0))
+
+    def test_early_stop_contaminado_cuts_empty_miss_fast_and_parses_post_home_contam(self) -> None:
+        args = supervisor.parse_args(["--mode", "run"])
+        self.assertEqual(args.post_home_steps_contaminado, 25)
+        tracker = supervisor.EarlyStopTracker(
+            target_key="contaminado",
+            baseline_counts={"verdes_en_A": 0, "rojos_en_A": 1, "verdes_en_B_SUP": 2, "rojos_en_B_INF": 1},
+        )
+        miss_an = {"verdes_en_A": 0, "rojos_en_A": 1, "verdes_en_B_SUP": 2, "rojos_en_B_INF": 1}
+        self.assertFalse(tracker.update_vision(miss_an, {"shoulder_pan.pos": -5.0, "shoulder_lift.pos": -20.0}, 11.0))
+        self.assertFalse(tracker.update_vision(miss_an, {"shoulder_pan.pos": -4.0, "shoulder_lift.pos": -10.0}, 11.4))
+        self.assertTrue(tracker.update_vision(miss_an, {"shoulder_pan.pos": -3.0, "shoulder_lift.pos": -15.0}, 11.8))
+        self.assertIn("Agarre vacío", tracker.stop_reason or "")

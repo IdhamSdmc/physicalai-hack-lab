@@ -410,6 +410,7 @@ class EarlyStopTracker:
         self._lock = threading.Lock()
         self._sano_stable = 0
         self._desechos_stable = 0
+        self._miss_stable = 0
         self.dropped_in_desechos = False
         self.lost_outside_tape = False
         self.visited_vaso_d = False
@@ -483,6 +484,7 @@ class EarlyStopTracker:
             )
             lost_red_out = (r_lost >= self.base_r_lost + 1) and (r_a < self.base_r_a)
             if (r_b >= self.base_r_b + 1 or merged_drop or lost_red_out) and (r_a < self.base_r_a):
+                self._miss_stable = 0
                 self._desechos_stable += 1
                 if self._desechos_stable >= 2:
                     self.dropped_in_desechos = True
@@ -490,6 +492,16 @@ class EarlyStopTracker:
                         self.lost_outside_tape = True
             elif not self.dropped_in_desechos:
                 self._desechos_stable = 0
+                # Si el brazo ya salió de ZONA_A (pan >= -16) tras >=10.5s y el cubo rojo sigue ahí, cortar para reintentar rápido
+                if elapsed_s >= 10.5 and self.base_r_a > 0 and r_a >= self.base_r_a and pan >= -16.0:
+                    self._miss_stable += 1
+                    if self._miss_stable >= 3:
+                        self.stop_reason = (
+                            f"Agarre vacío detectado a los {elapsed_s:.1f}s (cubo sigue en ZONA_A) -> retorno rápido a HOME."
+                        )
+                        return True
+                else:
+                    self._miss_stable = 0
             return False
 
 
@@ -928,6 +940,7 @@ class PersistentTriageSession:
         n_action_steps: int = 50,
         n_action_steps_contaminado: int = 60,
         post_home_action_steps: int = 0,
+        post_home_action_steps_contaminado: int = 25,
         temporal_ensemble_coeff: float | None = None,
     ) -> None:
         self.policy_paths = {"sano": policy_sano_path, "contaminado": policy_contaminado_path}
@@ -943,6 +956,7 @@ class PersistentTriageSession:
         self.n_action_steps = int(n_action_steps)
         self.n_action_steps_contaminado = int(n_action_steps_contaminado)
         self.post_home_action_steps = int(post_home_action_steps)
+        self.post_home_action_steps_contaminado = int(post_home_action_steps_contaminado)
         self.temporal_ensemble_coeff = temporal_ensemble_coeff
 
         self.robot: Any = None
@@ -1151,16 +1165,21 @@ class PersistentTriageSession:
                     action_queue = getattr(policy, "_action_queue", None)
                     refilled_now = action_queue is not None and len(action_queue) == 0
                     action_tensor = policy.select_action(batch)
+                    post_steps_for_target = (
+                        self.post_home_action_steps_contaminado
+                        if target_key == "contaminado" and self.post_home_action_steps_contaminado > 0
+                        else self.post_home_action_steps
+                    )
                     if (
                         refilled_now
                         and self.temporal_ensemble_coeff is None
-                        and self.post_home_action_steps > 0
+                        and post_steps_for_target > 0
                         and ticks > 0
                         and action_queue is not None
                     ):
                         # Chunk 0 usa n_action_steps completos para saltar la pausa en HOME;
-                        # los siguientes re-observan cámaras ~2.3x más rápido durante el descenso y agarre.
-                        keep_tail = max(self.post_home_action_steps - 1, 0)
+                        # los siguientes re-observan cámaras más rápido durante el descenso y agarre.
+                        keep_tail = max(post_steps_for_target - 1, 0)
                         while len(action_queue) > keep_tail:
                             action_queue.pop()
                     action_out = post(action_tensor).squeeze(0).cpu()
@@ -1299,6 +1318,7 @@ def run_autonomous_supervisor(
     n_action_steps: int = 50,
     n_action_steps_contaminado: int = 60,
     post_home_action_steps: int = 0,
+    post_home_action_steps_contaminado: int = 25,
     temporal_ensemble_coeff: float | None = None,
     remap_on_change: bool = True,
     remap_threshold_px: float = DEFAULT_REMAP_THRESHOLD_PX,
@@ -1334,6 +1354,7 @@ def run_autonomous_supervisor(
             n_action_steps=n_action_steps,
             n_action_steps_contaminado=n_action_steps_contaminado,
             post_home_action_steps=post_home_action_steps,
+            post_home_action_steps_contaminado=post_home_action_steps_contaminado,
             temporal_ensemble_coeff=temporal_ensemble_coeff,
         )
 
@@ -1524,15 +1545,14 @@ def run_autonomous_supervisor(
                         f"({prev_count} -> {new_count} en ZONA_A, sin llegar a {dest_key}). "
                         "Se considera bueno/omitido y seguimos con el siguiente."
                     )
-                    if target == "contaminado" and new_count == 0:
-                        already_disinfected = tracker_ref is not None and tracker_ref.visited_vaso_d
-                        if already_disinfected:
-                            print("🧼 [BIOSEGURIDAD] Desinfección en VASO D ya completada tras el último rojo.")
-                        elif session is not None and not dry_run and not is_mocked:
-                            print("🧼 [BIOSEGURIDAD] Último cubo rojo salió de la cinta -> desinfectando en VASO D y terminando ciclo.")
+                if target == "contaminado" and (evacuated_to_dest or new_count == 0):
+                    already_disinfected = tracker_ref is not None and tracker_ref.visited_vaso_d
+                    if not already_disinfected:
+                        if session is not None and not dry_run and not is_mocked:
+                            print("🧼 [BIOSEGURIDAD] Ejecutando desinfección garantizada en VASO D antes de continuar.")
                             session.dip_vaso_d()
                         elif not dry_run and not is_mocked:
-                            print("🧼 [BIOSEGURIDAD] Último cubo rojo salió de la cinta -> ejecutando baño en VASO D.")
+                            print("🧼 [BIOSEGURIDAD] Ejecutando baño garantizado en VASO D.")
                             move_robot_to_home(robot_port=robot_port, robot_id=robot_id, duration_s=1.2, keep_torque=True, target_pose=DEFAULT_VASO_D_POSE)
                             time.sleep(0.4)
                             move_robot_to_home(robot_port=robot_port, robot_id=robot_id, duration_s=1.2, keep_torque=True, target_pose=DEFAULT_HOME_POSE)
@@ -1619,7 +1639,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--post-home-steps",
         type=int,
         default=0,
-        help="Opcional: pasos por chunk tras salir de HOME (0 desactiva y usa --n-action-steps uniforme = 50).",
+        help="Opcional: pasos por chunk tras salir de HOME para act_sano (0 desactiva y usa --n-action-steps).",
+    )
+    parser.add_argument(
+        "--post-home-steps-contaminado",
+        type=int,
+        default=25,
+        help="Pasos por chunk tras salir de HOME para act_contaminado (25 = ~0.95s servoing con cámara muñeca; 0 desactiva).",
     )
     parser.add_argument("--temporal-ensemble", type=float, default=0.0, help="Coeficiente Temporal Ensembling ACT (0 desactivado).")
     parser.add_argument("--no-go-home", action="store_true", help="No mover suavemente al HOME del dataset antes/entre ciclos de --mode run.")
@@ -1668,6 +1694,7 @@ def main(argv: list[str] | None = None) -> int:
         n_action_steps=args.n_action_steps,
         n_action_steps_contaminado=args.n_action_steps_contaminado,
         post_home_action_steps=args.post_home_steps,
+        post_home_action_steps_contaminado=args.post_home_steps_contaminado,
         temporal_ensemble_coeff=te_coeff,
         remap_on_change=not args.no_remap_on_change,
         remap_threshold_px=args.remap_threshold_px,
