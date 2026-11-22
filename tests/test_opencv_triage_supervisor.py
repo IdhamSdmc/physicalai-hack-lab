@@ -834,3 +834,41 @@ class OpenCVTriageSupervisorTests(unittest.TestCase):
         self.assertFalse(tracker.update_vision(miss_an, {"shoulder_pan.pos": -4.0, "shoulder_lift.pos": -10.0}, 11.4))
         self.assertTrue(tracker.update_vision(miss_an, {"shoulder_pan.pos": -3.0, "shoulder_lift.pos": -15.0}, 11.8))
         self.assertIn("Agarre vacío", tracker.stop_reason or "")
+
+    def test_persistent_session_reset_policies_clears_queues_and_processors(self) -> None:
+        from collections import deque
+        from types import SimpleNamespace
+
+        class _ResetPolicy:
+            def __init__(self) -> None:
+                self.resets = 0
+                self._action_queue = deque([1, 2, 3])
+
+            def reset(self) -> None:
+                self.resets += 1
+                self._action_queue.clear()
+
+        class _ResetProc:
+            def __init__(self) -> None:
+                self.resets = 0
+
+            def reset(self) -> None:
+                self.resets += 1
+
+        session = supervisor.PersistentTriageSession(
+            policy_sano_path=Path("s"),
+            policy_contaminado_path=Path("c"),
+            robot_port="/dev/null",
+            robot_id="test",
+            robot_type="so101_follower",
+            cam_top_idx=1,
+            cam_wrist_idx=0,
+        )
+        p1, p2 = _ResetPolicy(), _ResetPolicy()
+        pr1, pr2 = _ResetProc(), _ResetProc()
+        po1, po2 = _ResetProc(), _ResetProc()
+        session._models = {"sano": (p1, pr1, po1), "contaminado": (p2, pr2, po2)}
+        session.torch_device = SimpleNamespace(type="cpu")
+        session.reset_policies()
+        self.assertEqual((p1.resets, p2.resets, len(p1._action_queue), len(p2._action_queue)), (1, 1, 0, 0))
+        self.assertEqual((pr1.resets, pr2.resets, po1.resets, po2.resets), (1, 1, 1, 1))

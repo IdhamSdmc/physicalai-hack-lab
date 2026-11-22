@@ -1078,14 +1078,29 @@ class PersistentTriageSession:
             lift_first=True,
         )
 
+    def reset_policies(self) -> None:
+        """Reset action queues, pre/post processors, and MPS cache between cycles/runs."""
+        for policy, pre, post in self._models.values():
+            policy.reset()
+            pre.reset()
+            post.reset()
+        if hasattr(self, "_torch") and self._torch is not None:
+            try:
+                if self.torch_device is not None and self.torch_device.type == "mps" and self._torch.backends.mps.is_available():
+                    self._torch.mps.empty_cache()
+            except Exception:
+                pass
+
     def capture_top_bgr(self, max_attempts: int = 5) -> np.ndarray:
-        time.sleep(0.12)
+        time.sleep(0.18)
         cam = self.robot.cameras["camera_top"]
         last_exc: Exception | None = None
         for attempt in range(max_attempts):
             try:
                 _ = cam.async_read(timeout_ms=600)
                 time.sleep(0.05)
+                _ = cam.async_read(timeout_ms=600)
+                time.sleep(0.04)
                 rgb = cam.async_read(timeout_ms=600)
             except TypeError:
                 # Fallback for mocks/cameras whose async_read() takes no timeout_ms kwarg
@@ -1396,10 +1411,18 @@ def run_autonomous_supervisor(
         signal.signal(signal.SIGINT, _on_stop_signal)
 
     try:
+        if not dry_run and not is_mocked:
+            for stale_path in (scene_map_path, hud_path.with_name("debug_last_fail.jpg")):
+                try:
+                    if stale_path.exists():
+                        stale_path.unlink()
+                except OSError:
+                    pass
         if session is not None:
             session.start()
             if go_home:
                 session.go_home(duration_s=1.8)
+            session.reset_policies()
         elif go_home and not dry_run and not is_mocked:
             move_robot_to_home(robot_port=robot_port, robot_id=robot_id, keep_torque=True)
 
@@ -1407,7 +1430,7 @@ def run_autonomous_supervisor(
             analysis, curr_map = scan_scene()
             if last_map is None and not is_mocked:
                 coords = ", ".join(f"{o['color']}({o['centroid'][0]},{o['centroid'][1]})" for o in curr_map["objects"] if o["roi"] == "ZONA_A")
-                print(f"[MAPA INICIAL] ZONA A -> {coords or 'vacía'} (guardado en {scene_map_path})")
+                print(f"[REMAP INICIAL] ZONA A -> {coords or 'vacía'} (guardado en {scene_map_path})")
             last_map = curr_map
 
             v_count = int(analysis["verdes_en_A"])
@@ -1417,6 +1440,16 @@ def run_autonomous_supervisor(
             print(f"[CICLO {cycle}] ZONA A: {v_count} Sanos (S) | {r_count} Contaminados (C) -> {analysis['next_order']}")
 
             if target == "completed":
+                if session is not None:
+                    session.reset_policies()
+                if not dry_run and not is_mocked:
+                    _, final_map = scan_scene(footer_hint="COMPLETADO | Estación reiniciada y remapeada")
+                    final_coords = ", ".join(
+                        f"{o['color']}({o['centroid'][0]},{o['centroid'][1]})"
+                        for o in final_map["objects"]
+                        if o["roi"] == "ZONA_A"
+                    )
+                    print(f"🧹 [REINICIO] Limpieza y remapeo final completados (ZONA A -> {final_coords or 'vacía'}).")
                 total_lost = lost_counts["sano"] + lost_counts["contaminado"]
                 if total_lost > 0:
                     print(
@@ -1509,9 +1542,11 @@ def run_autonomous_supervisor(
                 print(f"[ERROR] lerobot-rollout devolvió código {rc}.", file=sys.stderr)
                 return rc
 
-            # Asegurar brazo en HOME despejado antes de re-mapear coordenadas tras el rollout
-            if session is not None and go_home:
-                session.go_home(duration_s=1.8)
+            # Asegurar brazo en HOME despejado y limpiar estado de políticas antes de re-mapear
+            if session is not None:
+                if go_home:
+                    session.go_home(duration_s=1.8)
+                session.reset_policies()
             elif go_home and not is_mocked:
                 move_robot_to_home(robot_port=robot_port, robot_id=robot_id, duration_s=1.8, keep_torque=True)
                 time.sleep(0.25)
